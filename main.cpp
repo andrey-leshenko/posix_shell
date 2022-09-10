@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #include <vector>
 #include <string>
@@ -18,7 +19,55 @@ void panic(const char* msg)
     exit(-1);
 }
 
-int run_command(const string& command, const vector<string> args)
+enum class RedirType {
+    INPUT,
+    OUTPUT,
+    APPEND,
+    INPUT_DUP,
+    CLOSE,
+};
+
+struct redirection
+{
+    int src_fd;
+    const char* target_file;
+    int target_fd;
+    RedirType type;
+};
+
+void redirect(const redirection& redir)
+{
+    if (redir.type == RedirType::INPUT || redir.type == RedirType::OUTPUT || redir.type == RedirType::APPEND) {
+        int flags = 0;
+
+        if (redir.type == RedirType::INPUT) {
+            flags = O_RDONLY;
+        }
+        else if (redir.type == RedirType::OUTPUT) {
+            flags = O_WRONLY | O_CREAT | O_TRUNC;
+        }
+        else if (redir.type == RedirType::APPEND) {
+            flags = O_WRONLY | O_CREAT | O_APPEND;
+        }
+
+        int fd = open(redir.target_file, flags, 0666);
+        if (fd < 0)
+            panic("redirect file open failed");
+        dup2(fd, redir.src_fd);
+        close(fd);
+    }
+    else if (redir.type == RedirType::INPUT_DUP) {
+        dup2(redir.target_fd, redir.src_fd);
+    }
+    else if (redir.type == RedirType::CLOSE) {
+        close(redir.src_fd);
+    }
+}
+
+int run_command(
+    const string& command,
+    const vector<string>& args,
+    const vector<redirection>& redirections)
 {
     pid_t pid = fork();
 
@@ -42,14 +91,22 @@ int run_command(const string& command, const vector<string> args)
     // execve doesn't modify its arguments
     char ** argv_ptr = const_cast<char **>(&argv[0]);
 
+    // Redirections
+    for (auto& r : redirections)
+        redirect(r);
+
     execvp(argv[0], argv_ptr);
     panic("execve failed");
 }
 
-
-
 int main()
 {
-    run_command("echo", {"hello", "world", "from echo"});
+    run_command("echo", {"hello", "world", "from echo"}, {});
+    run_command("cat", {}, {redirection{0, "/etc/hostname", -1, RedirType::INPUT}});
+    run_command("echo", {"test redirection"}, {redirection{1, "/tmp/redir1", -1, RedirType::OUTPUT}});
+    run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
+    run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
+    run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
+    run_command("echo", {"test dup"}, {redirection{1, nullptr, 2, RedirType::INPUT_DUP}});
     return 0;
 }
