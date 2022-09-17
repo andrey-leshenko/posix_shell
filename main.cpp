@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -8,6 +9,8 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <fstream>
+#include <sstream>
 
 using std::vector;
 using std::string;
@@ -113,48 +116,59 @@ vector<string> operators
     ">|",
 };
 
-bool is_first_operator_char(char c)
+bool is_operator_prefix(const string& str)
 {
     for (auto& op : operators)
-        if (op[0] == c)
+        if (op.substr(0, str.size()) == str)
             return true;
 
     return false;
 }
 
-bool is_operator_continuation(const string& tok, char c)
+enum class TokenizerMode
 {
-    string combined = tok + c;
+    DEFAULT,
+    OPERATOR,
+    SLASH_QUOTE,
+    SINGLE_QUOTE,
+    DOUBLE_QUOTE,
+    DOUBLE_QUOTE_SLASH_QUOTE,
+};
 
-    for (auto& op : operators)
-        if (op.substr(0, combined.size()) == combined)
-            return true;
-
-    return false;
-}
-
-void tokenize(const char* str, size_t len)
+vector<string> tokenize(const char* str, size_t len)
 {
     vector<string> tokens;
     string tok;
-    bool in_operator = false;
-    bool quoted = false;
-    bool in_slash_quote = false;
 
-    #define DELIMIT_TOK in_operator = false; if (tok.size()) {tokens.emplace_back(std::move(tok));}
+    TokenizerMode mode = TokenizerMode::DEFAULT;
 
-    size_t i = 0;
+    #define DELIMIT_TOK if (tok.size()) {tokens.push_back(tok);}; tok.clear(); mode = TokenizerMode::DEFAULT;
 
-    while (true) {
+    for (size_t i = 0; ; i++) {
         if (i >= len) {
-            tokens.emplace_back(std::move(tok));
+            DELIMIT_TOK;
             break;
         }
 
         char c = str[i];
 
-        if (in_operator) {
-            if (is_operator_continuation(tok, c)) {
+        if (c == '\n') {
+            if (mode == TokenizerMode::SLASH_QUOTE || mode == TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE) {
+                // Line continuations are removed
+                assert(tok.size() && tok.back() == '\\');
+                tok.pop_back();
+                continue;
+            }
+            else {
+                DELIMIT_TOK;
+                tok.push_back('\n');
+                DELIMIT_TOK;
+                continue;
+            }
+        }
+
+        if (mode == TokenizerMode::OPERATOR) {
+            if (is_operator_prefix(tok + c)) {
                 tok.push_back(c);
                 continue;
             }
@@ -163,51 +177,110 @@ void tokenize(const char* str, size_t len)
             }
         }
 
-        if (!quoted) {
-            if (c == '\\') {
-                tok.push_back(c);
-                in_slash_quote = true;
+        if (mode == TokenizerMode::SLASH_QUOTE) {
+            if (c == '\n') {
+                // Line continuations are removed
+                assert(tok.size() && tok.back() == '\\');
+                tok.pop_back();
                 continue;
             }
-            // handle ' "
-            // handle $ `
-
-            if (is_first_operator_char(c)) {
-                DELIMIT_TOK;
-                tok.clear();
-                tok.push_back(c);
-                in_operator = true;
-                continue;
-            }
-            if (c == ' ') {
-                DELIMIT_TOK;
-                continue;
-            }
+            tok.push_back(c);
+            mode = TokenizerMode::DEFAULT;
+            continue;
+        }
+        else if (mode == TokenizerMode::SINGLE_QUOTE) {
+            tok.push_back(c);
+            if (c == '\'')
+                mode = TokenizerMode::DEFAULT;
+            continue;
+        }
+        else if (mode == TokenizerMode::DOUBLE_QUOTE) {
+            tok.push_back(c);
+            if (c == '"')
+                mode = TokenizerMode::DEFAULT;
+            if (c == '\\')
+                mode = TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE;
+            continue;
+        }
+        else if (mode == TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE) {
+            tok.push_back(c);
+            mode = TokenizerMode::DOUBLE_QUOTE;
+            continue;
         }
 
-        if (prev_part_of_word) {
+        assert(mode == TokenizerMode::DEFAULT);
+
+        if (c == '\\') {
             tok.push_back(c);
+            mode = TokenizerMode::SLASH_QUOTE;
+            continue;
+        }
+        else if (c == '\'') {
+            tok.push_back(c);
+            mode = TokenizerMode::SINGLE_QUOTE;
+            continue;
+        }
+        else if (c == '"') {
+            tok.push_back(c);
+            mode = TokenizerMode::DOUBLE_QUOTE;
+            continue;
+        }
+
+        if (is_operator_prefix(string{c})) {
+            DELIMIT_TOK;
+            tok.push_back(c);
+            mode = TokenizerMode::OPERATOR;
+            continue;
+        }
+
+        if (c == ' ') {
+            DELIMIT_TOK;
+            // Discard space
+            continue;
+        }
+
+        if (tok.size()) {
+            tok.push_back(c);
+            continue;
         }
 
         if (c == '#') {
-            while (i < len && str[i] != '\n')
+             while (i < len && str[i] != '\n')
                 i++;
-            // What now???
+            if (i < len /* && i == '\n' */)
+                i--; // We want to parse it again
+            continue;
         }
 
-
-
+        tok.push_back(c);
     }
+
+    return tokens;
 }
 
 int main()
 {
-    run_command("echo", {"hello", "world", "from echo"}, {});
-    run_command("cat", {}, {redirection{0, "/etc/hostname", -1, RedirType::INPUT}});
-    run_command("echo", {"test redirection"}, {redirection{1, "/tmp/redir1", -1, RedirType::OUTPUT}});
-    run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
-    run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
-    run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
-    run_command("echo", {"test dup"}, {redirection{1, nullptr, 2, RedirType::INPUT_DUP}});
+    // run_command("echo", {"hello", "world", "from echo"}, {});
+    // run_command("cat", {}, {redirection{0, "/etc/hostname", -1, RedirType::INPUT}});
+    // run_command("echo", {"test redirection"}, {redirection{1, "/tmp/redir1", -1, RedirType::OUTPUT}});
+    // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
+    // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
+    // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
+    // run_command("echo", {"test dup"}, {redirection{1, nullptr, 2, RedirType::INPUT_DUP}});
+
+    std::ifstream f("test.sh");
+    std::stringstream buffer;
+    buffer << f.rdbuf();
+    string script = buffer.str();
+
+    vector<string> tokens = tokenize(script.c_str(), script.size());
+
+    for (auto& s : tokens) {
+        if (s == "\n")
+            printf("'\\n'\n");
+        else
+            printf("%s\n", s.c_str());
+    }
+
     return 0;
 }
