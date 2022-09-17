@@ -99,6 +99,107 @@ int run_command(
     panic("execve failed");
 }
 
+vector<string> operators
+{
+    "&&",
+    "||",
+    ";;",
+    "<<",
+    ">>",
+    "<&",
+    ">&",
+    "<>",
+    "<<-",
+    ">|",
+};
+
+bool is_first_operator_char(char c)
+{
+    for (auto& op : operators)
+        if (op[0] == c)
+            return true;
+
+    return false;
+}
+
+bool is_operator_continuation(const string& tok, char c)
+{
+    string combined = tok + c;
+
+    for (auto& op : operators)
+        if (op.substr(0, combined.size()) == combined)
+            return true;
+
+    return false;
+}
+
+void tokenize(const char* str, size_t len)
+{
+    vector<string> tokens;
+    string tok;
+    bool in_operator = false;
+    bool quoted = false;
+    bool in_slash_quote = false;
+
+    #define DELIMIT_TOK in_operator = false; if (tok.size()) {tokens.emplace_back(std::move(tok));}
+
+    size_t i = 0;
+
+    while (true) {
+        if (i >= len) {
+            tokens.emplace_back(std::move(tok));
+            break;
+        }
+
+        char c = str[i];
+
+        if (in_operator) {
+            if (is_operator_continuation(tok, c)) {
+                tok.push_back(c);
+                continue;
+            }
+            else {
+                DELIMIT_TOK;
+            }
+        }
+
+        if (!quoted) {
+            if (c == '\\') {
+                tok.push_back(c);
+                in_slash_quote = true;
+                continue;
+            }
+            // handle ' "
+            // handle $ `
+
+            if (is_first_operator_char(c)) {
+                DELIMIT_TOK;
+                tok.clear();
+                tok.push_back(c);
+                in_operator = true;
+                continue;
+            }
+            if (c == ' ') {
+                DELIMIT_TOK;
+                continue;
+            }
+        }
+
+        if (prev_part_of_word) {
+            tok.push_back(c);
+        }
+
+        if (c == '#') {
+            while (i < len && str[i] != '\n')
+                i++;
+            // What now???
+        }
+
+
+
+    }
+}
+
 int main()
 {
     run_command("echo", {"hello", "world", "from echo"}, {});
