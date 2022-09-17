@@ -102,6 +102,40 @@ int run_command(
     panic("execve failed");
 }
 
+enum token {
+    WORD,
+    ASSIGNMENT_WORD,
+    NAME,
+    NEWLINE,
+    IO_NUMBER,
+    AND_IF,
+    OR_IF,
+    DSEMI,
+    DLESS,
+    DGREAT,
+    LESSAND,
+    GREATAND,
+    LESSGREAT,
+    DLESSDASH,
+    CLOBBER,
+    If,
+    Then,
+    Else,
+    Elif,
+    Fi,
+    Do,
+    Done,
+    Case,
+    Esac,
+    While,
+    Until,
+    For,
+    Lbrace,
+    Rbrace,
+    Bang,
+    In,
+};
+
 vector<string> operators
 {
     "&&",
@@ -114,6 +148,40 @@ vector<string> operators
     "<>",
     "<<-",
     ">|",
+};
+
+map<string, int> operators_map
+{
+    {"&&",  AND_IF      },
+    {"||",  OR_IF       },
+    {";;",  DSEMI       },
+    {"<<",  DLESS       },
+    {">>",  DGREAT      },
+    {"<&",  LESSAND     },
+    {">&",  GREATAND    },
+    {"<>",  LESSGREAT   },
+    {"<<-", DLESSDASH   },
+    {">|",  CLOBBER     },
+};
+
+map<string, int> reserved_words_map
+{
+    {"if",      If      },
+    {"then",    Then    },
+    {"else",    Else    },
+    {"elif",    Elif    },
+    {"fi",      Fi      },
+    {"do",      Do      },
+    {"done",    Done    },
+    {"case",    Case    },
+    {"esac",    Esac    },
+    {"while",   While   },
+    {"until",   Until   },
+    {"for",     For     },
+    {"{",       Lbrace  },
+    {"}",       Rbrace  },
+    {"!",       Bang    },
+    {"in",      In      },
 };
 
 bool is_operator_prefix(const string& str)
@@ -256,6 +324,28 @@ vector<string> tokenize(const char* str, size_t len)
     }
 
     return tokens;
+}
+
+bool is_digits(const string &str)
+{
+    return str.find_first_not_of("0123456789") == std::string::npos;
+}
+
+int token_categorize(const string &token, char delimiter)
+{
+    if (operators_map.find(token) != operators_map.end()) {
+        return operators_map[token];
+    }
+
+    if (is_digits && (delimiter == '<' || delimiter == '>')) {
+        return IO_NUMBER;
+    }
+
+    if (reserved_words_map.find(token) != reserved_words_map.end()) {
+        return reserved_words_map[token];
+    }
+
+    return NAME;
 }
 
 int main()
