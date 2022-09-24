@@ -102,39 +102,9 @@ int run_command(
     panic("execve failed");
 }
 
-enum token {
-    WORD,
-    ASSIGNMENT_WORD,
-    NAME,
-    NEWLINE,
-    IO_NUMBER,
-    AND_IF,
-    OR_IF,
-    DSEMI,
-    DLESS,
-    DGREAT,
-    LESSAND,
-    GREATAND,
-    LESSGREAT,
-    DLESSDASH,
-    CLOBBER,
-    If,
-    Then,
-    Else,
-    Elif,
-    Fi,
-    Do,
-    Done,
-    Case,
-    Esac,
-    While,
-    Until,
-    For,
-    Lbrace,
-    Rbrace,
-    Bang,
-    In,
-};
+// Prasing
+
+#include "parser.tab.cpp"
 
 vector<string> operators
 {
@@ -346,6 +316,27 @@ int token_categorize(const string &token, char delimiter)
     }
 
     return NAME;
+}
+
+// YACC interface
+
+int yylex()
+{
+    return 0;
+}
+
+int yyerror(const char *s)
+{
+    fprintf(stderr, "%s\n", s);
+}
+
+int yywrap()
+{
+    return 1;
+}
+
+void execute()
+{
 }
 
 int main()
