@@ -68,9 +68,9 @@ void redirect(const redirection& redir)
 }
 
 int run_command(
-    const string& command,
-    const vector<string>& args,
-    const vector<redirection>& redirections)
+    const vector<string>& args
+)
+    // const vector<redirection>& redirections)
 {
     pid_t pid = fork();
 
@@ -87,7 +87,6 @@ int run_command(
 
     // Child
     vector<const char*> argv;
-    argv.push_back(command.c_str());
     for (auto& a : args)
         argv.push_back(a.c_str());
     argv.push_back(nullptr);
@@ -95,8 +94,8 @@ int run_command(
     char ** argv_ptr = const_cast<char **>(&argv[0]);
 
     // Redirections
-    for (auto& r : redirections)
-        redirect(r);
+    // for (auto& r : redirections)
+    //     redirect(r);
 
     execvp(argv[0], argv_ptr);
     panic("execve failed");
@@ -104,240 +103,7 @@ int run_command(
 
 // Prasing
 
-#include "parser.tab.cpp"
-
-vector<string> operators
-{
-    "&&",
-    "||",
-    ";;",
-    "<<",
-    ">>",
-    "<&",
-    ">&",
-    "<>",
-    "<<-",
-    ">|",
-};
-
-map<string, int> operators_map
-{
-    {"&&",  AND_IF      },
-    {"||",  OR_IF       },
-    {";;",  DSEMI       },
-    {"<<",  DLESS       },
-    {">>",  DGREAT      },
-    {"<&",  LESSAND     },
-    {">&",  GREATAND    },
-    {"<>",  LESSGREAT   },
-    {"<<-", DLESSDASH   },
-    {">|",  CLOBBER     },
-};
-
-map<string, int> reserved_words_map
-{
-    {"if",      If      },
-    {"then",    Then    },
-    {"else",    Else    },
-    {"elif",    Elif    },
-    {"fi",      Fi      },
-    {"do",      Do      },
-    {"done",    Done    },
-    {"case",    Case    },
-    {"esac",    Esac    },
-    {"while",   While   },
-    {"until",   Until   },
-    {"for",     For     },
-    {"{",       Lbrace  },
-    {"}",       Rbrace  },
-    {"!",       Bang    },
-    {"in",      In      },
-};
-
-bool is_operator_prefix(const string& str)
-{
-    for (auto& op : operators)
-        if (op.substr(0, str.size()) == str)
-            return true;
-
-    return false;
-}
-
-enum class TokenizerMode
-{
-    DEFAULT,
-    OPERATOR,
-    SLASH_QUOTE,
-    SINGLE_QUOTE,
-    DOUBLE_QUOTE,
-    DOUBLE_QUOTE_SLASH_QUOTE,
-};
-
-vector<string> tokenize(const char* str, size_t len)
-{
-    vector<string> tokens;
-    string tok;
-
-    TokenizerMode mode = TokenizerMode::DEFAULT;
-
-    #define DELIMIT_TOK if (tok.size()) {tokens.push_back(tok);}; tok.clear(); mode = TokenizerMode::DEFAULT;
-
-    for (size_t i = 0; ; i++) {
-        if (i >= len) {
-            DELIMIT_TOK;
-            break;
-        }
-
-        char c = str[i];
-
-        if (c == '\n') {
-            if (mode == TokenizerMode::SLASH_QUOTE || mode == TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE) {
-                // Line continuations are removed
-                assert(tok.size() && tok.back() == '\\');
-                tok.pop_back();
-                continue;
-            }
-            else {
-                DELIMIT_TOK;
-                tok.push_back('\n');
-                DELIMIT_TOK;
-                continue;
-            }
-        }
-
-        if (mode == TokenizerMode::OPERATOR) {
-            if (is_operator_prefix(tok + c)) {
-                tok.push_back(c);
-                continue;
-            }
-            else {
-                DELIMIT_TOK;
-            }
-        }
-
-        if (mode == TokenizerMode::SLASH_QUOTE) {
-            if (c == '\n') {
-                // Line continuations are removed
-                assert(tok.size() && tok.back() == '\\');
-                tok.pop_back();
-                continue;
-            }
-            tok.push_back(c);
-            mode = TokenizerMode::DEFAULT;
-            continue;
-        }
-        else if (mode == TokenizerMode::SINGLE_QUOTE) {
-            tok.push_back(c);
-            if (c == '\'')
-                mode = TokenizerMode::DEFAULT;
-            continue;
-        }
-        else if (mode == TokenizerMode::DOUBLE_QUOTE) {
-            tok.push_back(c);
-            if (c == '"')
-                mode = TokenizerMode::DEFAULT;
-            if (c == '\\')
-                mode = TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE;
-            continue;
-        }
-        else if (mode == TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE) {
-            tok.push_back(c);
-            mode = TokenizerMode::DOUBLE_QUOTE;
-            continue;
-        }
-
-        assert(mode == TokenizerMode::DEFAULT);
-
-        if (c == '\\') {
-            tok.push_back(c);
-            mode = TokenizerMode::SLASH_QUOTE;
-            continue;
-        }
-        else if (c == '\'') {
-            tok.push_back(c);
-            mode = TokenizerMode::SINGLE_QUOTE;
-            continue;
-        }
-        else if (c == '"') {
-            tok.push_back(c);
-            mode = TokenizerMode::DOUBLE_QUOTE;
-            continue;
-        }
-
-        if (is_operator_prefix(string{c})) {
-            DELIMIT_TOK;
-            tok.push_back(c);
-            mode = TokenizerMode::OPERATOR;
-            continue;
-        }
-
-        if (c == ' ') {
-            DELIMIT_TOK;
-            // Discard space
-            continue;
-        }
-
-        if (tok.size()) {
-            tok.push_back(c);
-            continue;
-        }
-
-        if (c == '#') {
-             while (i < len && str[i] != '\n')
-                i++;
-            if (i < len /* && i == '\n' */)
-                i--; // We want to parse it again
-            continue;
-        }
-
-        tok.push_back(c);
-    }
-
-    return tokens;
-}
-
-bool is_digits(const string &str)
-{
-    return str.find_first_not_of("0123456789") == std::string::npos;
-}
-
-int token_categorize(const string &token, char delimiter)
-{
-    if (operators_map.find(token) != operators_map.end()) {
-        return operators_map[token];
-    }
-
-    if (is_digits && (delimiter == '<' || delimiter == '>')) {
-        return IO_NUMBER;
-    }
-
-    if (reserved_words_map.find(token) != reserved_words_map.end()) {
-        return reserved_words_map[token];
-    }
-
-    return NAME;
-}
-
-// YACC interface
-
-int yylex()
-{
-    return 0;
-}
-
-int yyerror(const char *s)
-{
-    fprintf(stderr, "%s\n", s);
-}
-
-int yywrap()
-{
-    return 1;
-}
-
-void execute()
-{
-}
+#include "parser.cpp"
 
 int main()
 {
@@ -349,19 +115,21 @@ int main()
     // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
     // run_command("echo", {"test dup"}, {redirection{1, nullptr, 2, RedirType::INPUT_DUP}});
 
-    std::ifstream f("test.sh");
+    std::ifstream f("test2.sh");
     std::stringstream buffer;
     buffer << f.rdbuf();
     string script = buffer.str();
 
-    vector<string> tokens = tokenize(script.c_str(), script.size());
+    // vector<string> tokens = tokenize(script.c_str(), script.size());
 
-    for (auto& s : tokens) {
-        if (s == "\n")
-            printf("'\\n'\n");
-        else
-            printf("%s\n", s.c_str());
-    }
+    // for (auto& s : tokens) {
+    //     if (s == "\n")
+    //         printf("'\\n'\n");
+    //     else
+    //         printf("%s\n", s.c_str());
+    // }
+
+    parse(script.c_str(), script.size());
 
     return 0;
 }

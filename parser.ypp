@@ -1,5 +1,11 @@
 %{
    #include "parser.hpp"
+
+   typedef ast_node *YYSTYPE;
+   #define YYSTYPE_IS_DECLARED
+
+   // We want to return a non-null value, without allocating anything
+   #define ASYNC_DUMMY_PTR ((ast_node*)1)
 %}
 
 /* -------------------------------------------------------
@@ -58,28 +64,43 @@
 %start program
 %%
 program          : linebreak complete_commands linebreak
+                        { dump_node($2); execute($2); }
                  | linebreak
                  ;
 complete_commands: complete_commands newline_list complete_command
+                        { $$ = node(";", $1, $3); }
                  |                                complete_command
                  ;
 complete_command : list separator_op
+                        { if ($2 == ASYNC_DUMMY_PTR)
+                              $1->right = node("&", $1->right);
+                          $$ == $1; }
                  | list
                  ;
 list             : list separator_op and_or
+                        {
+                            if ($2 == ASYNC_DUMMY_PTR)
+                                   $1->right = node("&", $1->right);
+                            $$ = node(";", $1); }
                  |                   and_or
+                        { $$ = node(";", NULL, $1); }
                  ;
 and_or           :                         pipeline
                  | and_or AND_IF linebreak pipeline
+                        { $$ = node("&&", $1, $4); }
                  | and_or OR_IF  linebreak pipeline
+                        { $$ = node("||", $1, $4); }
                  ;
 pipeline         :      pipe_sequence
                  | Bang pipe_sequence
+                        { $$ = node("!", $1); }
                  ;
 pipe_sequence    :                             command
                  | pipe_sequence '|' linebreak command
+                        { $$ = node("|", $1, $4); }
                  ;
 command          : simple_command
+                        { $$ = node("CMD", $1); }
                  | compound_command
                  | compound_command redirect_list
                  | function_definition
@@ -158,10 +179,15 @@ brace_group      : Lbrace compound_list Rbrace
 do_group         : Do compound_list Done           /* Apply rule 6 */
                  ;
 simple_command   : cmd_prefix cmd_word cmd_suffix
+                        { $$ = node("PRE", $1, node("ARG", $2, $3)); }
                  | cmd_prefix cmd_word
+                        { $$ = node("PRE", $1, node("ARG", $2)); }
                  | cmd_prefix
+                        { $$ = node("FREE_PREFIX", $1); }
                  | cmd_name cmd_suffix
+                        { $$ = node("ARG", $1, $2); }
                  | cmd_name
+                        { $$ = node("ARG", $1); }
                  ;
 cmd_name         : WORD                   /* Apply rule 7a */
                  ;
@@ -170,28 +196,43 @@ cmd_word         : WORD                   /* Apply rule 7b */
 cmd_prefix       :            io_redirect
                  | cmd_prefix io_redirect
                  |            ASSIGNMENT_WORD
+                        { $$ = node("=", $1, NULL); }
                  | cmd_prefix ASSIGNMENT_WORD
+                        { $$ = node(";", $1, node("=", $1, NULL)); }
                  ;
 cmd_suffix       :            io_redirect
                  | cmd_suffix io_redirect
+                        { $$ = node(";", $1, $2); }
                  |            WORD
+                        { $$ = node("ARG", $1, NULL); }
                  | cmd_suffix WORD
+                        { $$ = node(";", $1, node("ARG", $2)); }
                  ;
 redirect_list    :               io_redirect
                  | redirect_list io_redirect
+                        { $$ = node(";", $1, $2); }
                  ;
 io_redirect      :           io_file
                  | IO_NUMBER io_file
+                        { $$ = $2; $2->left = $1; }
                  |           io_here
                  | IO_NUMBER io_here
+                        { $$ = $2; $2->left = $1; }
                  ;
 io_file          : '<'       filename
+                        { $$ = node("<", nullptr, $2); }
                  | LESSAND   filename
+                        { $$ = node("<&", nullptr, $2); }
                  | '>'       filename
+                        { $$ = node(">", nullptr, $2); }
                  | GREATAND  filename
+                        { $$ = node(">&", nullptr, $2); }
                  | DGREAT    filename
+                        { $$ = node(">>", nullptr, $2); }
                  | LESSGREAT filename
+                        { $$ = node("<>", nullptr, $2); }
                  | CLOBBER   filename
+                        { $$ = node(">|", nullptr, $2); }
                  ;
 filename         : WORD                      /* Apply rule 2 */
                  ;
@@ -207,6 +248,7 @@ linebreak        : newline_list
                  | /* empty */
                  ;
 separator_op     : '&'
+                        { $$ = ASYNC_DUMMY_PTR; }
                  | ';'
                  ;
 separator        : separator_op linebreak
