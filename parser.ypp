@@ -92,8 +92,9 @@ and_or           :                         pipeline
                         { $$ = node("||", $1, $4); }
                  ;
 pipeline         :      pipe_sequence
+                        { $$ = node("PIPELINE", $1); }
                  | Bang pipe_sequence
-                        { $$ = node("!", $1); }
+                        { $$ = node("!", node("PIPELINE", $1)); }
                  ;
 pipe_sequence    :                             command
                  | pipe_sequence '|' linebreak command

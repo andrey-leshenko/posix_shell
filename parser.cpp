@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include <assert.h>
 
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+
 #include <vector>
 #include <string>
 #include <map>
@@ -13,6 +18,8 @@
 using std::vector;
 using std::string;
 using std::map;
+
+#define _C(X) X
 
 vector<string> operators
 {
@@ -267,34 +274,151 @@ int yywrap()
 
 vector<string> g_args;
 
-void execute(ast_node *root)
+struct redirection
+{
+    string type;
+    int left;
+    string right;
+};
+
+struct command_environment
+{
+    vector<string> args;
+    vector<redirection> redirs;
+};
+
+vector<command_environment> pipeline;
+
+int execute(ast_node *root)
 {
     if (!root)
-        return;
-    
+        return -1;
     if (is_leaf(root))
         assert(0);
     
     if (root->str == ";") {
         execute(root->left);
-        execute(root->right);
+        return execute(root->right);
+    }
+    else if (root->str == "&&") {
+        int res = execute(root->left);
+        if (!res)
+            res = execute(root->right);
+        return res;
+    }
+    else if (root->str == "||") {
+        int res = execute(root->left);
+        if (res)
+            res = execute(root->right);
+        return res;
+    }
+    else if (root->str == "!") {
+        return !execute(root->left);
     }
     else if (root->str == "CMD") {
-        g_args = {};
+        // Probably can be removed
         execute(root->left);
-
-        printf("Executing: ");
-        for (auto s : g_args)
-            printf("%s ", s.c_str());
-        printf("\n");
-
-        run_command(g_args);
-        g_args = {};
     }
     else if (root->str == "ARG") {
         assert(is_leaf(root->left));
-        g_args.push_back(root->left->str);
+        pipeline.back().args.push_back(root->left->str);
+        return execute(root->right);
+    }
+    else if (root->str == "PIPELINE") {
+        pipeline.clear();
+        pipeline.push_back({});
+        execute(root->left);
+
+        int rpipe[2] = {-1, -1};
+        int wpipe[2] = {-1, -1};
+
+        vector<pid_t> pids;
+
+        if (pipeline.size() > 1)
+            _C(pipe(rpipe));
+
+        for (size_t i = 0; i < pipeline.size(); i++) {
+            rpipe[0] = wpipe[0];
+            rpipe[1] = wpipe[1];
+
+            if (i + i < pipeline.size()) {
+                _C(pipe(wpipe));
+            }
+
+            pid_t pid = fork();
+
+            if (pid > 0) {
+                // Parent process
+                pids.push_back(pid);
+
+                close(rpipe[0]);
+                close(rpipe[1]);
+
+                continue;
+            }
+
+            // Child process
+
+            if (rpipe[0] >= 0) {
+                dup2(rpipe[0], 0);
+                close(rpipe[0]);
+                close(rpipe[1]);
+            }
+
+            if (wpipe[1] >= 0) {
+                dup2(wpipe[1], 1);
+                close(wpipe[0]);
+                close(wpipe[1]);
+            }
+
+            vector<const char*> argv;
+            for (auto& a : pipeline[i].args)
+                argv.push_back(a.c_str());
+            argv.push_back(nullptr);
+            // execve doesn't modify its arguments, so this is safe
+            char ** argv_ptr = const_cast<char **>(&argv[0]);
+
+            // Redirections
+            // for (auto& r : redirections)
+            //     redirect(r);
+
+            execvp(argv[0], argv_ptr);
+            panic("execve failed");
+        }
+
+        if (wpipe[0] >= 0) {
+            close(wpipe[0]);
+            close(wpipe[1]);
+        }
+
+        int exit_status = 0;
+
+        for (auto pid : pids) {
+            int wstatus;
+            waitpid(pid, &wstatus, 0);
+            exit_status = WEXITSTATUS(wstatus);
+        }
+
+        return exit_status;
+    }
+    else if (root->str == "|") {
+        execute(root->left);
+        // Begin new command
+        pipeline.push_back({});
         execute(root->right);
+    }
+    else if (root->str == "<" || root->str == "<&" || root->str == ">"
+        || root->str == ">&" || root->str == ">>" || root->str == "<>"
+        || root->str == ">|") {
+        redirection redir;
+        redir.type = root->str;
+        redir.right = root->right->str;
+        if (root->left)
+            redir.left = atoi(root->left->str.c_str());
+        else
+            redir.left = -1;
+            
+        pipeline.back().redirs.push_back(redir);
     }
     else {
         printf("Ignoring node: %s\n", root->str.c_str());

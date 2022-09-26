@@ -30,7 +30,7 @@ enum class RedirType {
     CLOSE,
 };
 
-struct redirection
+struct _redirection
 {
     int src_fd;
     const char* target_file;
@@ -38,7 +38,7 @@ struct redirection
     RedirType type;
 };
 
-void redirect(const redirection& redir)
+void redirect(const _redirection& redir)
 {
     if (redir.type == RedirType::INPUT || redir.type == RedirType::OUTPUT || redir.type == RedirType::APPEND) {
         int flags = 0;

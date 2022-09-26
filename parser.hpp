@@ -61,4 +61,4 @@ void dump_node(ast_node *root, int indent=0)
     }
 }
 
-void execute(ast_node *root);
+int execute(ast_node *root);
