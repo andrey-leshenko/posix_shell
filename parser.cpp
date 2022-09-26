@@ -6,6 +6,7 @@
 
 #include <unistd.h>
 #include <sys/types.h>
+#include <pwd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 
@@ -272,6 +273,95 @@ int yywrap()
     return 1;
 }
 
+// 2.6.1 Tilde Expansion
+
+string tilde_expand(const string &word)
+{
+    if (word.size() == 0 || word[0] != '~')
+        return word;
+    
+    string tilde_prefix;
+    string expand_value;
+
+    for (size_t i = 1; i < word.size(); i++) {
+        if (word[i] == '/')
+            break;
+        else if (word[i] == '\\')
+            // None of the characters in the tilde-prefix can be quoted.
+            return word;
+        else
+            tilde_prefix.push_back(word[i]);
+    }
+
+    if (tilde_prefix.size() == 0) {
+        expand_value = getenv("HOME");
+    }
+    else {
+        passwd *pass = getpwnam(tilde_prefix.c_str());
+
+        if (!pass)
+            return word;
+        
+        expand_value = pass->pw_dir;
+    }
+
+    // TODO: quote the expanded value to prevent field splitting and pathname expansion
+    return expand_value + word.substr(tilde_prefix.size() + 1);
+}
+
+// 2.6.7 Quote Removal
+
+string quote_remove(const string &word)
+{
+    string result;
+    size_t i = 0;
+
+    while (i < word.size()) {
+        if (word[i] == '\\') {
+            // Skip the slash
+            i++;
+            // The next char goes in as-is
+            if (i < word.size()) {
+                result.push_back(word[i]);
+                i++;
+            }
+        }
+        else if (word[i] == '\'') {
+            // Skip the opening quote
+            i++;
+            while (i < word.size() && word[i] != '\'') {
+                // Everything inside gets as-is
+                result.push_back(word[i]);
+                i++;
+            }
+            // Skip the closing quote
+            i++;
+        }
+        else if (word[i] == '"') {
+            // Skip the opening quote
+            i++;
+            while (i < word.size() && word[i] != '\"') {
+                if (word[i] == '\\'
+                    && i + 1 < word.size()
+                    && (word[i + 1] == '$' || word[i + 1] == '`' || word[i + 1] == '"' || word[i + 1] == '\\')) {
+                    // Skip special slashes
+                    i++;
+                }
+                result.push_back(word[i]);
+                i++;
+            }
+            // Skip the closing quote
+            i++;
+        }
+        else {
+            result.push_back(word[i]);
+            i++;
+        }
+    }
+
+    return result;
+}
+
 vector<string> g_args;
 
 struct redirection
@@ -321,7 +411,12 @@ int execute(ast_node *root)
     }
     else if (root->str == "ARG") {
         assert(is_leaf(root->left));
-        pipeline.back().args.push_back(root->left->str);
+
+        string s = root->left->str;
+        s = tilde_expand(s);
+        s = quote_remove(s);
+
+        pipeline.back().args.push_back(s);
         return execute(root->right);
     }
     else if (root->str == "PIPELINE") {
@@ -336,12 +431,12 @@ int execute(ast_node *root)
 
         if (pipeline.size() > 1)
             _C(pipe(rpipe));
-
+        
         for (size_t i = 0; i < pipeline.size(); i++) {
             rpipe[0] = wpipe[0];
             rpipe[1] = wpipe[1];
 
-            if (i + i < pipeline.size()) {
+            if (i + 1 < pipeline.size()) {
                 _C(pipe(wpipe));
             }
 
