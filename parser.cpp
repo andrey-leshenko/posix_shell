@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -221,6 +222,11 @@ bool is_digits(const string &str)
     return str.find_first_not_of("0123456789") == std::string::npos;
 }
 
+bool is_special_param(char c)
+{
+    return c == '@' || c == '*' || c == '#' || c == '?' || c =='-' || c == '$' || c == '!' || c =='0';
+}
+
 int token_categorize(const string &token, char delimiter)
 {
     if (token == "\n")
@@ -272,6 +278,316 @@ int yywrap()
 {
     return 1;
 }
+
+class Reader
+{
+    string data;
+    size_t i;
+
+    Reader(const string &data)
+        : data{data}, i{0} { }
+
+    bool eof() { return i < data.size(); }
+
+    char peek()
+    {
+        assert(!eof());
+        return data[i];
+    }
+
+    char pop()
+    {
+        assert(!eof());
+        return data[i++];
+    }
+
+    bool at(char prefix)
+    {
+        return !eof() && data[i] == prefix;
+    }
+
+    bool at(const char *prefix)
+    {
+        // TODO: remove escaped newlines
+        for (size_t k; prefix[k]; k++)
+            if (i + k < data.size() || data[i + k] != prefix[k])
+                return false;
+        
+        return true;
+    }
+
+    void eat(char prefix)
+    {
+        assert(peek() == prefix);
+        pop();
+    }
+
+    void eat(const char *prefix)
+    {
+        assert(at(prefix));
+        i += strlen(prefix);
+    }
+
+    string read_slash_quote(bool keep_quotes)
+    {
+        string result;
+        
+        eat('\\');
+
+        if (eof()) {
+            // Interpreted as a regular slash
+            result.push_back('\\');
+        }
+        else {
+            if (keep_quotes)
+                result.push_back('\\');
+            result.push_back(pop());
+        }
+
+        return result;
+    }
+
+    string read_single_quote(bool keep_quotes)
+    {
+        string result;
+
+        eat('\'');
+        if (keep_quotes)
+            result.push_back('\'');
+
+        while (!eof() && !at('\''))
+            result.push_back(pop());
+        
+        if (eof())
+            panic("EOF in '");
+        
+        eat('\'');
+        if (keep_quotes)
+            result.push_back('\'');
+
+        return result;
+    }
+
+    string read_double_quote(bool keep_quotes)
+    {
+        string result;
+
+        eat('"');
+        if (keep_quotes)
+            result.push_back('"');
+        
+        while (!eof() && !at('"')) {
+            if (at("\\$") || at("\\`") || at("\\\"") || at("\\\\")) {
+                // Only allowed escapes inside double quotes
+                pop();
+                result.push_back(pop());
+            }
+            else if (at('`'))
+                result.append(read_subshell_backquote(true));
+            else if (at("$(("))
+                return read_arithmetic_expand(true);
+            else if (at("$("))
+                return read_subshell(true);
+            else if (at("${"))
+                return read_param_expand_in_braces(true);
+            else if (at('$'))
+                return read_param_expand(true);
+            else {
+                result.push_back(pop());
+            }
+        }
+        
+        if (eof())
+            panic("EOF in \"");
+        
+        eat('"');
+        if (keep_quotes)
+            result.push_back('"');
+
+        return result;
+    }
+
+    string read_param_expand(bool keep_quotes)
+    {
+        string result;
+
+        eat('$');
+        if (keep_quotes)
+            result.push_back('$');
+        
+        if (eof())
+            // Interpreted as a regular $
+            return "$";
+        
+        if (isdigit(peek()) || is_special_param(peek())) {
+            result.push_back(pop());
+            return result;
+        }
+        else if (isalpha(peek()) || peek() == '_') {
+            while (!eof() && (isalnum(peek()) || peek() == '_'))
+                result.push_back(pop());
+        }
+        else {
+            result = "$";
+        }
+
+        return result;
+    }
+
+    string read_param_expand_in_braces(bool keep_quotes)
+    {
+        return read_recursive("${", "}", nullptr, nullptr, keep_quotes);
+    }
+    string read_subshell(bool keep_quotes)
+    {
+        return read_recursive("$(", ")", "(", ")", keep_quotes);
+    }
+    string read_subshell_backquote(bool keep_quotes)
+    {
+        string result;
+
+        eat("`");
+        if (keep_quotes)
+            result.append("`");
+        
+        while (!eof() && !at('`')) {
+            if (at('\\'))
+                result.append(read_slash_quote(true));
+            else
+                result.push_back(peek());
+        }
+
+        if (eof())
+            panic("EOF in `");
+
+        eat("`");
+        if (keep_quotes)
+            result.append("`");
+        
+        return result;
+    }
+    string read_arithmetic_expand(bool keep_quotes)
+    {
+        return read_recursive("$((", "))", "(", ")", keep_quotes);
+    }
+
+    string read_recursive(const char *start, const char *end, const char *brace_left, const char *brace_right, bool keep_quotes)
+    {
+        string result;
+
+        int brace_level = 0;
+
+        eat(start);
+        if (keep_quotes)
+            result.append(start);
+        
+        while (!eof()) {
+            if (brace_level == 0 && at(end)) {
+                break;
+            }
+
+            if (brace_left && at(brace_left)) {
+                result.append(brace_left);
+                eat(brace_left);
+                brace_level++;
+            }
+            else if (brace_right && at(brace_right)) {
+                result.append(brace_right);
+                eat(brace_right);
+                brace_level--;
+            }
+            else if (at('\''))
+                result.append(read_single_quote(true));
+            else if (at('\"'))
+                result.append(read_double_quote(true));
+            else if (at('\\'))
+                result.append(read_slash_quote(true));
+            else if (at('`'))
+                result.append(read_subshell_backquote(true));
+            else if (at("$(("))
+                return read_arithmetic_expand(true);
+            else if (at("$("))
+                return read_subshell(true);
+            else if (at("${"))
+                return read_param_expand_in_braces(true);
+            else if (at('$'))
+                return read_param_expand(true);
+            else {
+                result.push_back(pop());
+            }
+        }
+
+        if (eof())
+            panic("EOF in nested expression");
+
+        eat(end);
+        if (keep_quotes)
+            result.append(end);
+        
+        return result;
+    }
+
+    string read_operator()
+    {
+        string result;
+
+        while (!eof() && is_operator_prefix(result + peek()))
+            result.push_back(pop());
+        
+        return result;
+    }
+
+    void read_comment()
+    {
+        eat('#');
+        while (!eof() && !at('\n'))
+            pop();
+    }
+
+    string read_token()
+    {
+        while (at('#'))
+            read_comment();
+        
+        assert(!eof());
+
+        if (is_operator_prefix(string{peek()})) {
+            return read_operator();
+        }
+
+        string result;
+
+        while (!eof()) {
+            if (at('\\'))
+                result.append(read_slash_quote(true));
+            else if (at('\''))
+                result.append(read_single_quote(true));
+            else if (at('\"'))
+                result.append(read_double_quote(true));
+            else if (at('`'))
+                result.append(read_subshell_backquote(true));
+            else if (at("$(("))
+                result.append(read_arithmetic_expand(true));
+            else if (at("$("))
+                result.append(read_subshell(true));
+            else if (at("${"))
+                result.append(read_param_expand_in_braces(true));
+            else if (at('$'))
+                result.append(read_param_expand(true));
+            else if (is_operator_prefix(string{peek()}))
+                break;
+            else if (at(' ')) {
+                pop();
+                break;
+            }
+            else {
+                result.push_back(pop());
+            }
+        }
+
+        return result;
+    }
+};
 
 // 2.6.1 Tilde Expansion
 
