@@ -11,6 +11,7 @@
 #include <map>
 #include <fstream>
 #include <sstream>
+#include <iostream>
 
 using std::vector;
 using std::string;
@@ -105,6 +106,19 @@ int run_command(
 
 #include "parser.cpp"
 
+void repl()
+{
+    string line;
+
+    std::cout << "$ " << std::flush;
+    while (std::getline(std::cin, line)) {
+        Reader r(line);
+        while (!r.eof())
+            std::cout << r.read_token() << std::endl;
+        std::cout << "$ " << std::flush;
+    }
+}
+
 int main()
 {
     // run_command("echo", {"hello", "world", "from echo"}, {});
@@ -114,6 +128,9 @@ int main()
     // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
     // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
     // run_command("echo", {"test dup"}, {redirection{1, nullptr, 2, RedirType::INPUT_DUP}});
+
+    repl();
+    return 0;
 
     std::ifstream f("test2.sh");
     std::stringstream buffer;

@@ -1,7 +1,7 @@
 #pragma once
 
 int yylex();
-int yyerror(const char *s);
+void yyerror(const char *s);
 int yywrap();
 
 #define NODE_CONCAT ";"

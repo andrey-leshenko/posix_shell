@@ -269,7 +269,7 @@ int yylex()
     return category;
 }
 
-int yyerror(const char *s)
+void yyerror(const char *s)
 {
     fprintf(stderr, "%s\n", s);
 }
@@ -284,10 +284,12 @@ class Reader
     string data;
     size_t i;
 
+public:
+
     Reader(const string &data)
         : data{data}, i{0} { }
 
-    bool eof() { return i < data.size(); }
+    bool eof() { return i >= data.size(); }
 
     char peek()
     {
@@ -308,9 +310,8 @@ class Reader
 
     bool at(const char *prefix)
     {
-        // TODO: remove escaped newlines
-        for (size_t k; prefix[k]; k++)
-            if (i + k < data.size() || data[i + k] != prefix[k])
+        for (size_t k = 0; prefix[k]; k++)
+            if (i + k >= data.size() || data[i + k] != prefix[k])
                 return false;
         
         return true;
@@ -337,6 +338,10 @@ class Reader
         if (eof()) {
             // Interpreted as a regular slash
             result.push_back('\\');
+        }
+        else if (at('\n')) {
+            // escaped newlines are removed entirely
+            result.clear();
         }
         else {
             if (keep_quotes)
@@ -380,18 +385,14 @@ class Reader
             if (at("\\$") || at("\\`") || at("\\\"") || at("\\\\")) {
                 // Only allowed escapes inside double quotes
                 pop();
+                if (keep_quotes)
+                    result.push_back('\\');
                 result.push_back(pop());
             }
             else if (at('`'))
                 result.append(read_subshell_backquote(true));
-            else if (at("$(("))
-                return read_arithmetic_expand(true);
-            else if (at("$("))
-                return read_subshell(true);
-            else if (at("${"))
-                return read_param_expand_in_braces(true);
-            else if (at('$'))
-                return read_param_expand(true);
+            else if (at("$"))
+                result.append(read_dollar(true));
             else {
                 result.push_back(pop());
             }
@@ -446,29 +447,44 @@ class Reader
     {
         string result;
 
-        eat("`");
+        eat('`');
         if (keep_quotes)
-            result.append("`");
+            result.push_back('`');
         
         while (!eof() && !at('`')) {
             if (at('\\'))
                 result.append(read_slash_quote(true));
             else
-                result.push_back(peek());
+                result.push_back(pop());
         }
 
         if (eof())
             panic("EOF in `");
 
-        eat("`");
+        eat('`');
         if (keep_quotes)
-            result.append("`");
+            result.push_back('`');
         
         return result;
     }
+
     string read_arithmetic_expand(bool keep_quotes)
     {
         return read_recursive("$((", "))", "(", ")", keep_quotes);
+    }
+
+    string read_dollar(bool keep_quotes)
+    {
+            if (at("$(("))
+                return read_arithmetic_expand(true);
+            else if (at("$("))
+                return read_subshell(true);
+            else if (at("${"))
+                return read_param_expand_in_braces(true);
+            else if (at('$'))
+                return read_param_expand(true);
+            else
+                assert(0);
     }
 
     string read_recursive(const char *start, const char *end, const char *brace_left, const char *brace_right, bool keep_quotes)
@@ -504,14 +520,8 @@ class Reader
                 result.append(read_slash_quote(true));
             else if (at('`'))
                 result.append(read_subshell_backquote(true));
-            else if (at("$(("))
-                return read_arithmetic_expand(true);
-            else if (at("$("))
-                return read_subshell(true);
-            else if (at("${"))
-                return read_param_expand_in_braces(true);
-            else if (at('$'))
-                return read_param_expand(true);
+            else if (at("$"))
+                result.append(read_dollar(true));
             else {
                 result.push_back(pop());
             }
@@ -549,7 +559,9 @@ class Reader
         while (at('#'))
             read_comment();
         
-        assert(!eof());
+        if (eof())
+            // TODO: This is a strange situation. Maybe we should make it imporrislbe
+            return "";
 
         if (is_operator_prefix(string{peek()})) {
             return read_operator();
@@ -566,24 +578,22 @@ class Reader
                 result.append(read_double_quote(true));
             else if (at('`'))
                 result.append(read_subshell_backquote(true));
-            else if (at("$(("))
-                result.append(read_arithmetic_expand(true));
-            else if (at("$("))
-                result.append(read_subshell(true));
-            else if (at("${"))
-                result.append(read_param_expand_in_braces(true));
             else if (at('$'))
-                result.append(read_param_expand(true));
+                result.append(read_dollar(true));
             else if (is_operator_prefix(string{peek()}))
                 break;
             else if (at(' ')) {
                 pop();
-                break;
+                if (result.size())
+                    break;
             }
             else {
                 result.push_back(pop());
             }
         }
+
+        while (at('#'))
+            read_comment();
 
         return result;
     }
