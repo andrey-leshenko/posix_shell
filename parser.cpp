@@ -37,6 +37,15 @@ vector<string> operators
     ">|",
 };
 
+vector<string> special_chars
+{
+    "&",
+    "|",
+    ";",
+    "<",
+    ">",
+};
+
 vector<string> reserved_words
 {
     "if",
@@ -64,6 +73,10 @@ enum class TokenType
     NAME,
     NEWLINE,
     IO_NUMBER,
+
+    OPERATOR,
+    SPECIAL_CHAR,
+    RESERVED_WORD,
 };
 
 bool is_operator_prefix(const string& str)
@@ -363,12 +376,12 @@ public:
     string read_token()
     {
         bool out_is_io_number;
-        return read_token(out_is_io_number);
+        return read_token(&out_is_io_number);
     }
 
-    string read_token(bool &out_is_io_number)
+    string read_token(bool *out_is_io_number)
     {
-        out_is_io_number = false;
+        *out_is_io_number = false;
 
         string result;
 
@@ -386,7 +399,7 @@ public:
             else if (is_operator_prefix(string{peek()})) {
                 if (result.size()) {
                     if (is_digits(result) && (at('<') || at('>')))
-                        out_is_io_number = true;
+                        *out_is_io_number = true;
                     break;
                 }
                 else {
@@ -418,12 +431,17 @@ public:
     }
 };
 
-#if 0
-
-class Tokenizer
+class TokenReader
 {
-    TokenType token_categorize(const string &token, char delimiter)
+    Reader r;
+    string token;
+    bool is_io_number;
+
+    TokenType token_type()
     {
+        if (is_io_number)
+            return TokenType::IO_NUMBER;
+
         if (token == "\n")
             return TokenType::NEWLINE;
 
@@ -431,11 +449,57 @@ class Tokenizer
             return TokenType::OPERATOR;
         }
 
-        if (is_digits && (delimiter == '<' || delimiter == '>')) {
-            return IO_NUMBER;
+        if (std::find(special_chars.begin(), special_chars.end(), token) != special_chars.end()) {
+            return TokenType::SPECIAL_CHAR;
         }
 
-        return WORD;
+        // TODO: Apply this only for command name
+        if (std::find(reserved_words.begin(), reserved_words.end(), token) != reserved_words.end()) {
+            return TokenType::RESERVED_WORD;
+        }
+
+        return TokenType::WORD;
+    }
+
+public:
+    TokenReader(const Reader &r)
+        : r{r}
+    {
+        // Initialize the token
+        pop();
+    }
+
+    bool eof()
+    {
+        return token.size() == 0;
+    }
+
+    string peek()
+    {
+        return token;
+    }
+
+    string pop()
+    {
+        string result = token;
+        token = this->r.read_token(&is_io_number);
+        return result;
+    }
+    string pop(TokenType expected_type)
+    {
+        if (expected_type != token_type())
+            panic("unexpected token type");
+        return pop();
+    }
+
+    bool at(TokenType type)
+    {
+        return !eof() && token_type() == type;
+    }
+
+    bool at(TokenType type, const char *value)
+    {
+        return at(type) && token == value;
     }
 };
 
@@ -460,13 +524,13 @@ struct ast_command
 
 struct ast_pipeline
 {
-    bool invert_exit_code;
+    bool invert_exit_code = 0;
     vector<ast_command> commands;
 };
 
 struct ast_and_or
 {
-    bool async;
+    bool async = 0;
     vector<ast_pipeline> pipelines;
     vector<bool> is_and;
 };
@@ -476,31 +540,60 @@ struct ast_program
     vector<ast_and_or> and_ors;
 };
 
-class TokenReader
-{
-public:
-    bool eof();
-    char peek();
-    char pop();
-    bool at(char prefix);
-};
-
 // Read zero or more new lines
 void parse_skip_linebreak(TokenReader &r)
 {
-    while (r.at(NEWLINE))
-        r.eat(NEWLINE);
+    while (r.at(TokenType::NEWLINE))
+        r.pop();
+}
+
+bool at_redirect_operator(TokenReader &r)
+{
+    return r.at(TokenType::SPECIAL_CHAR, "<")
+        || r.at(TokenType::SPECIAL_CHAR, ">")
+        || r.at(TokenType::OPERATOR, "<&")
+        || r.at(TokenType::OPERATOR, ">&")
+        || r.at(TokenType::OPERATOR, ">>")
+        || r.at(TokenType::OPERATOR, "<>")
+        || r.at(TokenType::OPERATOR, ">|");
+}
+
+bool at_redirect(TokenReader &r)
+{
+    return r.at(TokenType::IO_NUMBER) || at_redirect_operator(r);
+}
+
+ast_redirect parse_redirect(TokenReader &r)
+{
+    ast_redirect redirect;
+
+    if (r.at(TokenType::IO_NUMBER)) {
+        redirect.lhs = r.pop(TokenType::IO_NUMBER);
+    }
+
+    if (!at_redirect_operator(r)) {
+        panic("unexpected token");
+    }
+
+    redirect.op = r.pop();        
+
+    redirect.rhs = r.pop(TokenType::WORD);
+
+    return redirect;
 }
 
 ast_simple_command parse_simple_command(TokenReader &r)
 {
     ast_simple_command simple_command;
 
+    // r.set_rule(GrammarRule::PRE_COMMAND_ASSIGNMENT);
+
     while (true) {
-        if (parse_assignment_possible(r)) {
-            simple_command.assignments.push_back(r.pop());
-        }
-        else if (parse_redirect_possible(r)) {
+        // if (r.at(TokenType::ASSIGNMENT_WORD)) {
+        //     simple_command.assignments.push_back(r.pop());
+        // }
+        // else if (at_redirect(r)) {
+        if (at_redirect(r)) {
             simple_command.redirections.push_back(parse_redirect(r));
         }
         else {
@@ -508,11 +601,13 @@ ast_simple_command parse_simple_command(TokenReader &r)
         }
     }
 
+    // r.clear_rule();
+
     while (true) {
-        if (r.at(WORD)) {
+        if (r.at(TokenType::WORD)) {
             simple_command.args.push_back(r.pop());
         }
-        else if (parse_redirect_possible(r)) {
+        else if (at_redirect(r)) {
             simple_command.redirections.push_back(parse_redirect(r));
         }
         else {
@@ -521,11 +616,6 @@ ast_simple_command parse_simple_command(TokenReader &r)
     }
 
     return simple_command;
-}
-
-ast_redirect parse_redirect(TokenReader &r)
-{
-    
 }
 
 ast_command parse_command(TokenReader &r)
@@ -539,16 +629,16 @@ ast_pipeline parse_pipeline(TokenReader &r)
 {
     ast_pipeline pipeline;
 
-    if (r.at(Bang)) {
-        r.eat(Bang);
+    if (r.at(TokenType::RESERVED_WORD, "!")) {
+        r.pop();
         pipeline.invert_exit_code = true;
     }
 
     while (true) {
         pipeline.commands.push_back(parse_command(r));
 
-        if (r.at('|')) {
-            r.eat('|');
+        if (r.at(TokenType::SPECIAL_CHAR, "|")) {
+            r.pop();
             parse_skip_linebreak(r);
         }
         else {
@@ -566,8 +656,8 @@ ast_and_or parse_and_or(TokenReader &r)
     while (true) {
         and_or.pipelines.push_back(parse_pipeline(r));
 
-        if (r.at(AND_IF) || r.at(OR_IF)) {
-            and_or.is_and.push_back(r.at(AND_IF));
+        if (r.at(TokenType::OPERATOR, "&&") || r.at(TokenType::OPERATOR, "||")) {
+            and_or.is_and.push_back(r.at(TokenType::OPERATOR, "&&"));
             parse_skip_linebreak(r);
         }
         else {
@@ -575,8 +665,8 @@ ast_and_or parse_and_or(TokenReader &r)
         }
     }
 
-    if (r.at(';') || r.at('&')) {
-        and_or.async = r.at('&');
+    if (r.at(TokenType::SPECIAL_CHAR, ";") || r.at(TokenType::SPECIAL_CHAR, "&")) {
+        and_or.async = r.at(TokenType::SPECIAL_CHAR, "&");
     }
 
     return and_or;
@@ -595,9 +685,6 @@ ast_program parse_program(TokenReader &r)
 
     return program;
 }
-
-#endif
-
 
 
 
@@ -688,6 +775,12 @@ string quote_remove(const string &word)
     }
 
     return result;
+}
+
+void execute(const string &program)
+{
+    TokenReader r = TokenReader(Reader(program));
+    ast_program p = parse_program(r);
 }
 
 #if 0

@@ -112,10 +112,11 @@ void repl()
 
     std::cout << "$ " << std::flush;
     while (std::getline(std::cin, line)) {
-        Reader r(line);
-        while (!r.eof())
-            std::cout << r.read_token() << std::endl;
+        // Reader r(line);
+        // while (!r.eof())
+        //     std::cout << r.read_token() << std::endl;
         std::cout << "$ " << std::flush;
+        execute(line);
     }
 }
 
@@ -146,7 +147,7 @@ int main()
     //         printf("%s\n", s.c_str());
     // }
 
-    parse(script.c_str(), script.size());
+    //parse(script.c_str(), script.size());
 
     return 0;
 }
