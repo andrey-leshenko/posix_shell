@@ -1,5 +1,4 @@
-//#include "parser.hpp"
-#include "parser.tab.cpp"
+#include "parser.hpp"
 
 #include <stdio.h>
 #include <assert.h>
@@ -16,6 +15,7 @@
 #include <map>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 
 using std::vector;
 using std::string;
@@ -37,42 +37,33 @@ vector<string> operators
     ">|",
 };
 
-map<string, int> tokens_map
+vector<string> reserved_words
 {
-    // Stand-alone chars
-    {"&",   '&'         },
-    {"|",   '|'         },
-    {";",   ';'         },
-    {"<",   '<'         },
-    {">",   '>'         },
-    // Operators
-    {"&&",  AND_IF      },
-    {"||",  OR_IF       },
-    {";;",  DSEMI       },
-    {"<<",  DLESS       },
-    {">>",  DGREAT      },
-    {"<&",  LESSAND     },
-    {">&",  GREATAND    },
-    {"<>",  LESSGREAT   },
-    {"<<-", DLESSDASH   },
-    {">|",  CLOBBER     },
-    // Reserved words
-    {"if",      If      },
-    {"then",    Then    },
-    {"else",    Else    },
-    {"elif",    Elif    },
-    {"fi",      Fi      },
-    {"do",      Do      },
-    {"done",    Done    },
-    {"case",    Case    },
-    {"esac",    Esac    },
-    {"while",   While   },
-    {"until",   Until   },
-    {"for",     For     },
-    {"{",       Lbrace  },
-    {"}",       Rbrace  },
-    {"!",       Bang    },
-    {"in",      In      },
+    "if",
+    "then",
+    "else",
+    "elif",
+    "fi",
+    "do",
+    "done",
+    "case",
+    "esac",
+    "while",
+    "until",
+    "for",
+    "{",
+    "}",
+    "!",
+    "in",
+};
+
+enum class TokenType
+{
+    WORD,
+    ASSIGNMENT_WORD,
+    NAME,
+    NEWLINE,
+    IO_NUMBER,
 };
 
 bool is_operator_prefix(const string& str)
@@ -84,139 +75,6 @@ bool is_operator_prefix(const string& str)
     return false;
 }
 
-enum class TokenizerMode
-{
-    DEFAULT,
-    OPERATOR,
-    SLASH_QUOTE,
-    SINGLE_QUOTE,
-    DOUBLE_QUOTE,
-    DOUBLE_QUOTE_SLASH_QUOTE,
-};
-
-vector<string> tokenize(const char* str, size_t len)
-{
-    vector<string> tokens;
-    string tok;
-
-    TokenizerMode mode = TokenizerMode::DEFAULT;
-
-    #define DELIMIT_TOK if (tok.size()) {tokens.push_back(tok);}; tok.clear(); mode = TokenizerMode::DEFAULT;
-
-    for (size_t i = 0; ; i++) {
-        if (i >= len) {
-            DELIMIT_TOK;
-            break;
-        }
-
-        char c = str[i];
-
-        if (c == '\n') {
-            if (mode == TokenizerMode::SLASH_QUOTE || mode == TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE) {
-                // Line continuations are removed
-                assert(tok.size() && tok.back() == '\\');
-                tok.pop_back();
-                continue;
-            }
-            else {
-                DELIMIT_TOK;
-                tok.push_back('\n');
-                DELIMIT_TOK;
-                continue;
-            }
-        }
-
-        if (mode == TokenizerMode::OPERATOR) {
-            if (is_operator_prefix(tok + c)) {
-                tok.push_back(c);
-                continue;
-            }
-            else {
-                DELIMIT_TOK;
-            }
-        }
-
-        if (mode == TokenizerMode::SLASH_QUOTE) {
-            if (c == '\n') {
-                // Line continuations are removed
-                assert(tok.size() && tok.back() == '\\');
-                tok.pop_back();
-                continue;
-            }
-            tok.push_back(c);
-            mode = TokenizerMode::DEFAULT;
-            continue;
-        }
-        else if (mode == TokenizerMode::SINGLE_QUOTE) {
-            tok.push_back(c);
-            if (c == '\'')
-                mode = TokenizerMode::DEFAULT;
-            continue;
-        }
-        else if (mode == TokenizerMode::DOUBLE_QUOTE) {
-            tok.push_back(c);
-            if (c == '"')
-                mode = TokenizerMode::DEFAULT;
-            if (c == '\\')
-                mode = TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE;
-            continue;
-        }
-        else if (mode == TokenizerMode::DOUBLE_QUOTE_SLASH_QUOTE) {
-            tok.push_back(c);
-            mode = TokenizerMode::DOUBLE_QUOTE;
-            continue;
-        }
-
-        assert(mode == TokenizerMode::DEFAULT);
-
-        if (c == '\\') {
-            tok.push_back(c);
-            mode = TokenizerMode::SLASH_QUOTE;
-            continue;
-        }
-        else if (c == '\'') {
-            tok.push_back(c);
-            mode = TokenizerMode::SINGLE_QUOTE;
-            continue;
-        }
-        else if (c == '"') {
-            tok.push_back(c);
-            mode = TokenizerMode::DOUBLE_QUOTE;
-            continue;
-        }
-
-        if (is_operator_prefix(string{c})) {
-            DELIMIT_TOK;
-            tok.push_back(c);
-            mode = TokenizerMode::OPERATOR;
-            continue;
-        }
-
-        if (c == ' ') {
-            DELIMIT_TOK;
-            // Discard space
-            continue;
-        }
-
-        if (tok.size()) {
-            tok.push_back(c);
-            continue;
-        }
-
-        if (c == '#') {
-             while (i < len && str[i] != '\n')
-                i++;
-            if (i < len /* && i == '\n' */)
-                i--; // We want to parse it again
-            continue;
-        }
-
-        tok.push_back(c);
-    }
-
-    return tokens;
-}
-
 bool is_digits(const string &str)
 {
     return str.find_first_not_of("0123456789") == std::string::npos;
@@ -225,58 +83,6 @@ bool is_digits(const string &str)
 bool is_special_param(char c)
 {
     return c == '@' || c == '*' || c == '#' || c == '?' || c =='-' || c == '$' || c == '!' || c =='0';
-}
-
-int token_categorize(const string &token, char delimiter)
-{
-    if (token == "\n")
-        return NEWLINE;
-
-    if (tokens_map.find(token) != tokens_map.end()) {
-        return tokens_map[token];
-    }
-
-    if (is_digits && (delimiter == '<' || delimiter == '>')) {
-        return IO_NUMBER;
-    }
-
-    return WORD;
-}
-
-static vector<string> g_tokens;
-static int g_token_i;
-
-// YACC interface
-
-int yylex()
-{
-    if (g_token_i >= g_tokens.size())
-        return 0;
-    
-    const string &tok = g_tokens[g_token_i];
-    g_token_i++;
-
-    //printf("token: '%s'\n", tok.c_str());
-
-    yylval = nullptr;
-    int category = token_categorize(tok, 0);
-
-    if (category == WORD || category == NAME || category == IO_NUMBER || category == ASSIGNMENT_WORD)
-        yylval = leaf(tok);
-    else
-        yylval = nullptr;
-    
-    return category;
-}
-
-void yyerror(const char *s)
-{
-    fprintf(stderr, "%s\n", s);
-}
-
-int yywrap()
-{
-    return 1;
 }
 
 class Reader
@@ -556,16 +362,13 @@ public:
 
     string read_token()
     {
-        while (at('#'))
-            read_comment();
-        
-        if (eof())
-            // TODO: This is a strange situation. Maybe we should make it imporrislbe
-            return "";
+        bool out_is_io_number;
+        return read_token(out_is_io_number);
+    }
 
-        if (is_operator_prefix(string{peek()})) {
-            return read_operator();
-        }
+    string read_token(bool &out_is_io_number)
+    {
+        out_is_io_number = false;
 
         string result;
 
@@ -580,22 +383,59 @@ public:
                 result.append(read_subshell_backquote(true));
             else if (at('$'))
                 result.append(read_dollar(true));
-            else if (is_operator_prefix(string{peek()}))
-                break;
+            else if (is_operator_prefix(string{peek()})) {
+                if (result.size()) {
+                    if (is_digits(result) && (at('<') || at('>')))
+                        out_is_io_number = true;
+                    break;
+                }
+                else {
+                    return read_operator();
+                }
+            }
             else if (at(' ')) {
                 pop();
                 if (result.size())
                     break;
+            }
+            else if (at('\n')) {
+                if (result.size()) {
+                    break;
+                }
+                else {
+                    return string{pop()};
+                }
+            }
+            else if (result.size() == 0 && at('#')) {
+                read_comment();
             }
             else {
                 result.push_back(pop());
             }
         }
 
-        while (at('#'))
-            read_comment();
-
         return result;
+    }
+};
+
+#if 0
+
+class Tokenizer
+{
+    TokenType token_categorize(const string &token, char delimiter)
+    {
+        if (token == "\n")
+            return TokenType::NEWLINE;
+
+        if (std::find(operators.begin(), operators.end(), token) != operators.end()) {
+            return TokenType::OPERATOR;
+        }
+
+        if (is_digits && (delimiter == '<' || delimiter == '>')) {
+            return IO_NUMBER;
+        }
+
+        return WORD;
     }
 };
 
@@ -756,8 +596,7 @@ ast_program parse_program(TokenReader &r)
     return program;
 }
 
-
-
+#endif
 
 
 
@@ -850,6 +689,8 @@ string quote_remove(const string &word)
 
     return result;
 }
+
+#if 0
 
 vector<string> g_args;
 
@@ -1022,3 +863,5 @@ void parse(const char *str, size_t len)
     if (res)
         printf("Parsing error!");
 }
+
+#endif
