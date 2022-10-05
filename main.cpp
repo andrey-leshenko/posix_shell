@@ -17,7 +17,7 @@ using std::vector;
 using std::string;
 using std::map;
 
-void panic(const char* msg)
+void panic [[ noreturn ]] (const char* msg)
 {
     printf("panic: %s\n", msg);
     exit(-1);
@@ -115,8 +115,8 @@ void repl()
         // Reader r(line);
         // while (!r.eof())
         //     std::cout << r.read_token() << std::endl;
-        std::cout << "$ " << std::flush;
         execute(line);
+        std::cout << "$ " << std::flush;
     }
 }
 

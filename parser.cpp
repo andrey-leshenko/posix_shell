@@ -658,6 +658,7 @@ ast_and_or parse_and_or(TokenReader &r)
 
         if (r.at(TokenType::OPERATOR, "&&") || r.at(TokenType::OPERATOR, "||")) {
             and_or.is_and.push_back(r.at(TokenType::OPERATOR, "&&"));
+            r.pop();
             parse_skip_linebreak(r);
         }
         else {
@@ -667,6 +668,7 @@ ast_and_or parse_and_or(TokenReader &r)
 
     if (r.at(TokenType::SPECIAL_CHAR, ";") || r.at(TokenType::SPECIAL_CHAR, "&")) {
         and_or.async = r.at(TokenType::SPECIAL_CHAR, "&");
+        r.pop();
     }
 
     return and_or;
@@ -684,6 +686,148 @@ ast_program parse_program(TokenReader &r)
     }
 
     return program;
+}
+
+int execute_simple_command(const ast_simple_command &simple_command)
+{
+    if (simple_command.assignments.size())
+        panic("not implemented");
+    
+    if (simple_command.redirections.size())
+        panic("not implemented");
+    
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        panic("fork failed");
+    }
+
+    if (pid > 0) {
+        // Parent
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        return WEXITSTATUS(wstatus);
+    }
+
+    // Child
+    vector<const char*> argv;
+
+    for (auto& arg : simple_command.args)
+        argv.push_back(arg.c_str());
+
+    argv.push_back(nullptr);
+
+    // execve doesn't modify its arguments, so should be safe
+    char ** argv_ptr = const_cast<char **>(&argv[0]);
+
+    execvp(argv[0], argv_ptr);
+    panic("execve failed");
+}
+
+int execute_command(const ast_command &command)
+{
+    return execute_simple_command(command.cmd);
+}
+
+int execute_pipeline(const ast_pipeline &pipeline)
+{
+    int rpipe[2] = {-1, -1};
+    int wpipe[2] = {-1, -1};
+
+    vector<pid_t> pids;
+
+    const vector<ast_command> &commands = pipeline.commands;
+    
+    for (size_t i = 0; i < commands.size(); i++) {
+        rpipe[0] = wpipe[0];
+        rpipe[1] = wpipe[1];
+
+        if (i + 1 < commands.size()) {
+            _C(pipe(wpipe));
+        }
+
+        pid_t pid = fork();
+
+        if (pid > 0) {
+            // Parent process
+            pids.push_back(pid);
+
+            close(rpipe[0]);
+            close(rpipe[1]);
+
+            continue;
+        }
+
+        // Child process
+
+        if (rpipe[0] >= 0) {
+            dup2(rpipe[0], 0);
+            close(rpipe[0]);
+            close(rpipe[1]);
+        }
+
+        if (wpipe[1] >= 0) {
+            dup2(wpipe[1], 1);
+            close(wpipe[0]);
+            close(wpipe[1]);
+        }
+
+        // TODO: When executing a simple command, we don't really need to have
+        // both the forked process waiting, and the command process running.
+        // Maybe we can do some kind of tail-execv optimization?
+        exit(execute_command(commands[i]));
+    }
+
+    if (wpipe[0] >= 0) {
+        close(wpipe[0]);
+        close(wpipe[1]);
+    }
+
+    int exit_status = 0;
+
+    for (auto pid : pids) {
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        exit_status = WEXITSTATUS(wstatus);
+    }
+
+    return exit_status;   
+}
+
+int execute_and_or(const ast_and_or &and_or)
+{
+    int exit_status = 0;
+
+    if (and_or.async)
+        panic("not implemented");
+    
+    for (size_t i = 0; i < and_or.pipelines.size(); i++) {
+        if (i > 0) {
+            if (and_or.is_and[i - 1] && exit_status != 0) {
+                // short-circuit AND
+                continue;
+            }
+            else if (!and_or.is_and[i - 1] && exit_status == 0) {
+                // short-circuit OR
+                continue;
+            }
+        }
+
+        exit_status = execute_pipeline(and_or.pipelines[i]);
+    }
+
+    return exit_status;
+}
+
+int execute_program(const ast_program &program)
+{
+    int exit_status = 0;
+
+    for (const ast_and_or& and_or : program.and_ors) {
+        exit_status = execute_and_or(and_or);
+    }
+
+    return exit_status;
 }
 
 
@@ -781,180 +925,5 @@ void execute(const string &program)
 {
     TokenReader r = TokenReader(Reader(program));
     ast_program p = parse_program(r);
+    execute_program(p);
 }
-
-#if 0
-
-vector<string> g_args;
-
-struct redirection
-{
-    string type;
-    int left;
-    string right;
-};
-
-struct command_environment
-{
-    vector<string> args;
-    vector<redirection> redirs;
-};
-
-vector<command_environment> pipeline;
-
-int execute(ast_node *root)
-{
-    if (!root)
-        return -1;
-    if (is_leaf(root))
-        assert(0);
-    
-    if (root->str == ";") {
-        execute(root->left);
-        return execute(root->right);
-    }
-    else if (root->str == "&&") {
-        int res = execute(root->left);
-        if (!res)
-            res = execute(root->right);
-        return res;
-    }
-    else if (root->str == "||") {
-        int res = execute(root->left);
-        if (res)
-            res = execute(root->right);
-        return res;
-    }
-    else if (root->str == "!") {
-        return !execute(root->left);
-    }
-    else if (root->str == "CMD") {
-        // Probably can be removed
-        execute(root->left);
-    }
-    else if (root->str == "ARG") {
-        assert(is_leaf(root->left));
-
-        string s = root->left->str;
-        s = tilde_expand(s);
-        s = quote_remove(s);
-
-        pipeline.back().args.push_back(s);
-        return execute(root->right);
-    }
-    else if (root->str == "PIPELINE") {
-        pipeline.clear();
-        pipeline.push_back({});
-        execute(root->left);
-
-        int rpipe[2] = {-1, -1};
-        int wpipe[2] = {-1, -1};
-
-        vector<pid_t> pids;
-
-        if (pipeline.size() > 1)
-            _C(pipe(rpipe));
-        
-        for (size_t i = 0; i < pipeline.size(); i++) {
-            rpipe[0] = wpipe[0];
-            rpipe[1] = wpipe[1];
-
-            if (i + 1 < pipeline.size()) {
-                _C(pipe(wpipe));
-            }
-
-            pid_t pid = fork();
-
-            if (pid > 0) {
-                // Parent process
-                pids.push_back(pid);
-
-                close(rpipe[0]);
-                close(rpipe[1]);
-
-                continue;
-            }
-
-            // Child process
-
-            if (rpipe[0] >= 0) {
-                dup2(rpipe[0], 0);
-                close(rpipe[0]);
-                close(rpipe[1]);
-            }
-
-            if (wpipe[1] >= 0) {
-                dup2(wpipe[1], 1);
-                close(wpipe[0]);
-                close(wpipe[1]);
-            }
-
-            vector<const char*> argv;
-            for (auto& a : pipeline[i].args)
-                argv.push_back(a.c_str());
-            argv.push_back(nullptr);
-            // execve doesn't modify its arguments, so this is safe
-            char ** argv_ptr = const_cast<char **>(&argv[0]);
-
-            // Redirections
-            // for (auto& r : redirections)
-            //     redirect(r);
-
-            execvp(argv[0], argv_ptr);
-            panic("execve failed");
-        }
-
-        if (wpipe[0] >= 0) {
-            close(wpipe[0]);
-            close(wpipe[1]);
-        }
-
-        int exit_status = 0;
-
-        for (auto pid : pids) {
-            int wstatus;
-            waitpid(pid, &wstatus, 0);
-            exit_status = WEXITSTATUS(wstatus);
-        }
-
-        return exit_status;
-    }
-    else if (root->str == "|") {
-        execute(root->left);
-        // Begin new command
-        pipeline.push_back({});
-        execute(root->right);
-    }
-    else if (root->str == "<" || root->str == "<&" || root->str == ">"
-        || root->str == ">&" || root->str == ">>" || root->str == "<>"
-        || root->str == ">|") {
-        redirection redir;
-        redir.type = root->str;
-        redir.right = root->right->str;
-        if (root->left)
-            redir.left = atoi(root->left->str.c_str());
-        else
-            redir.left = -1;
-            
-        pipeline.back().redirs.push_back(redir);
-    }
-    else {
-        printf("Ignoring node: %s\n", root->str.c_str());
-        //assert(0);
-    }
-}
-
-void parse(const char *str, size_t len)
-{
-    //yydebug = 1;
-
-    g_tokens = tokenize(str, len);
-    g_token_i = 0;
-
-    int res = yyparse();
-
-    if (res)
-        printf("Parsing error!");
-}
-
-#endif
