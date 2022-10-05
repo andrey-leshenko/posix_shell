@@ -599,6 +599,169 @@ public:
     }
 };
 
+struct ast_redirect
+{
+    string lhs;
+    string op;
+    string rhs;
+};
+
+struct ast_simple_command
+{
+    vector<string> assignments;
+    vector<string> args;
+    vector<ast_redirect> redirections;
+};
+
+struct ast_command
+{
+    ast_simple_command cmd;
+};
+
+struct ast_pipeline
+{
+    bool invert_exit_code;
+    vector<ast_command> commands;
+};
+
+struct ast_and_or
+{
+    bool async;
+    vector<ast_pipeline> pipelines;
+    vector<bool> is_and;
+};
+
+struct ast_program
+{
+    vector<ast_and_or> and_ors;
+};
+
+class TokenReader
+{
+public:
+    bool eof();
+    char peek();
+    char pop();
+    bool at(char prefix);
+};
+
+// Read zero or more new lines
+void parse_skip_linebreak(TokenReader &r)
+{
+    while (r.at(NEWLINE))
+        r.eat(NEWLINE);
+}
+
+ast_simple_command parse_simple_command(TokenReader &r)
+{
+    ast_simple_command simple_command;
+
+    while (true) {
+        if (parse_assignment_possible(r)) {
+            simple_command.assignments.push_back(r.pop());
+        }
+        else if (parse_redirect_possible(r)) {
+            simple_command.redirections.push_back(parse_redirect(r));
+        }
+        else {
+            break;
+        }
+    }
+
+    while (true) {
+        if (r.at(WORD)) {
+            simple_command.args.push_back(r.pop());
+        }
+        else if (parse_redirect_possible(r)) {
+            simple_command.redirections.push_back(parse_redirect(r));
+        }
+        else {
+            break;
+        }
+    }
+
+    return simple_command;
+}
+
+ast_redirect parse_redirect(TokenReader &r)
+{
+    
+}
+
+ast_command parse_command(TokenReader &r)
+{
+    ast_command command;
+    command.cmd = parse_simple_command(r);
+    return command;
+}
+
+ast_pipeline parse_pipeline(TokenReader &r)
+{
+    ast_pipeline pipeline;
+
+    if (r.at(Bang)) {
+        r.eat(Bang);
+        pipeline.invert_exit_code = true;
+    }
+
+    while (true) {
+        pipeline.commands.push_back(parse_command(r));
+
+        if (r.at('|')) {
+            r.eat('|');
+            parse_skip_linebreak(r);
+        }
+        else {
+            break;
+        }
+    }
+
+    return pipeline;
+};
+
+ast_and_or parse_and_or(TokenReader &r)
+{
+    ast_and_or and_or;
+
+    while (true) {
+        and_or.pipelines.push_back(parse_pipeline(r));
+
+        if (r.at(AND_IF) || r.at(OR_IF)) {
+            and_or.is_and.push_back(r.at(AND_IF));
+            parse_skip_linebreak(r);
+        }
+        else {
+            break;
+        }
+    }
+
+    if (r.at(';') || r.at('&')) {
+        and_or.async = r.at('&');
+    }
+
+    return and_or;
+}
+
+ast_program parse_program(TokenReader &r)
+{
+    ast_program program;
+
+    parse_skip_linebreak(r);
+
+    while (!r.eof()) {
+        program.and_ors.push_back(parse_and_or(r));
+        parse_skip_linebreak(r);
+    }
+
+    return program;
+}
+
+
+
+
+
+
+
 // 2.6.1 Tilde Expansion
 
 string tilde_expand(const string &word)
