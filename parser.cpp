@@ -688,13 +688,61 @@ ast_program parse_program(TokenReader &r)
     return program;
 }
 
+void execute_redirect(const ast_redirect &redirect)
+{
+    int left_fd;
+
+    if (redirect.lhs.size()) {
+        left_fd = str_to_int(redirect.lhs.c_str());
+    }
+    else if (redirect.op == "<" || redirect.op == "<&" || redirect.op == "<>") {
+        left_fd = 0;
+    }
+    else if (redirect.op == ">" || redirect.op == ">&" || redirect.op == ">>" || redirect.op == ">|") {
+        left_fd = 1;
+    }
+    else {
+        assert(0);
+    }
+
+    if (redirect.op == "<&" || redirect.op == ">&") {
+        if (redirect.rhs == "-") {
+            close(left_fd);
+        }
+        else {
+            int right_fd = str_to_int(redirect.rhs.c_str());
+            dup2(right_fd, left_fd);
+        }
+    }
+    else {
+        int flags = 0;
+
+        if (redirect.op == "<")
+            flags = O_RDONLY;
+        else if (redirect.op == ">" || redirect.op == ">|")
+            flags = O_WRONLY | O_CREAT | O_TRUNC;
+        else if (redirect.op == ">>")
+            flags = O_WRONLY | O_CREAT | O_APPEND;
+        else if (redirect.op == "<>")
+            flags = O_RDWR | O_CREAT;
+        else
+            assert(0);
+
+        int right_fd = open(redirect.rhs.c_str(), flags, 0666);
+        if (right_fd < 0)
+            panic("redirect file open failed");
+        dup2(right_fd, left_fd);
+        close(right_fd);
+    }
+}
+
 int execute_simple_command(const ast_simple_command &simple_command)
 {
     if (simple_command.assignments.size())
         panic("not implemented");
-    
-    if (simple_command.redirections.size())
-        panic("not implemented");
+
+    for (const ast_redirect &redirect : simple_command.redirections)
+        execute_redirect(redirect);
     
     pid_t pid = fork();
 

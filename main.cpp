@@ -17,89 +17,22 @@ using std::vector;
 using std::string;
 using std::map;
 
+// Utils
+
 void panic [[ noreturn ]] (const char* msg)
 {
     printf("panic: %s\n", msg);
     exit(-1);
 }
 
-enum class RedirType {
-    INPUT,
-    OUTPUT,
-    APPEND,
-    INPUT_DUP,
-    CLOSE,
-};
-
-struct _redirection
+int str_to_int(const char *str)
 {
-    int src_fd;
-    const char* target_file;
-    int target_fd;
-    RedirType type;
-};
-
-void redirect(const _redirection& redir)
-{
-    if (redir.type == RedirType::INPUT || redir.type == RedirType::OUTPUT || redir.type == RedirType::APPEND) {
-        int flags = 0;
-
-        if (redir.type == RedirType::INPUT) {
-            flags = O_RDONLY;
-        }
-        else if (redir.type == RedirType::OUTPUT) {
-            flags = O_WRONLY | O_CREAT | O_TRUNC;
-        }
-        else if (redir.type == RedirType::APPEND) {
-            flags = O_WRONLY | O_CREAT | O_APPEND;
-        }
-
-        int fd = open(redir.target_file, flags, 0666);
-        if (fd < 0)
-            panic("redirect file open failed");
-        dup2(fd, redir.src_fd);
-        close(fd);
+    char* p;
+    long n = strtol(str, &p, 10);
+    if (*p) {
+        panic("convertion to int failed");
     }
-    else if (redir.type == RedirType::INPUT_DUP) {
-        dup2(redir.target_fd, redir.src_fd);
-    }
-    else if (redir.type == RedirType::CLOSE) {
-        close(redir.src_fd);
-    }
-}
-
-int run_command(
-    const vector<string>& args
-)
-    // const vector<redirection>& redirections)
-{
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        panic("fork failed");
-    }
-
-    if (pid > 0) {
-        // Parent
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-        return WEXITSTATUS(wstatus);
-    }
-
-    // Child
-    vector<const char*> argv;
-    for (auto& a : args)
-        argv.push_back(a.c_str());
-    argv.push_back(nullptr);
-    // execve doesn't modify its arguments
-    char ** argv_ptr = const_cast<char **>(&argv[0]);
-
-    // Redirections
-    // for (auto& r : redirections)
-    //     redirect(r);
-
-    execvp(argv[0], argv_ptr);
-    panic("execve failed");
+    return n;
 }
 
 // Prasing
