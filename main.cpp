@@ -40,6 +40,14 @@ int str_to_int(const char *str)
     return n;
 }
 
+string read_file(const char *path)
+{
+    std::ifstream f(path);
+    std::stringstream buffer;
+    buffer << f.rdbuf();
+    return buffer.str();
+}
+
 // Prasing
 
 vector<string> operators
@@ -290,8 +298,13 @@ public:
             result.push_back('`');
         
         while (!eof() && !at('`')) {
-            if (at('\\'))
-                result.append(read_slash_quote(true));
+            if (at("\\$") || at("\\`") || at("\\\\")) {
+                // The only cases when backslash is special
+                pop();
+                if (keep_quotes)
+                    result.push_back('\\');
+                result.push_back(pop());
+            }
             else
                 result.push_back(pop());
         }
@@ -736,7 +749,39 @@ string expand_tilde_prefix(const string &tilde_prefix)
     }
 }
 
-vector<string> expand_word(const string& word)
+void execute(const string &program);
+
+void subshell(const string &program)
+{
+    // TODO: Really open a subshell here
+    execute(program);
+}
+
+string expand_command(const string &command)
+{
+    // TODO: Find something more elegant than redirecting to a file
+
+    // The X-s will be replaced by mkstemp
+    char filename[] = "stdoutXXXXXX";
+    int new_stdout = mkstemp(filename);
+    int old_stdout = dup(1);
+
+    dup2(new_stdout, 1);
+    close(new_stdout);
+    subshell(command);
+    dup2(old_stdout, 1);
+    close(old_stdout);
+
+    string result = read_file(filename);
+    unlink(filename);
+
+    while (result.size() && result.back() == '\n')
+        result.pop_back();
+
+    return result;
+}
+
+vector<string> expand_word(const string &word)
 {
     Reader r(word);
     string result;
@@ -764,11 +809,11 @@ vector<string> expand_word(const string& word)
         else if (r.at('\"'))
             result.append(r.read_double_quote(false));
         else if (r.at('`'))
-            result.append(r.read_subshell_backquote(false));
+            result.append(expand_command(r.read_subshell_backquote(false)));
         else if (r.at("$(("))
             result.append(r.read_arithmetic_expand(false));
         else if (r.at("$("))
-            result.append(r.read_subshell(false));
+            result.append(expand_command(r.read_subshell(false)));
         else if (r.at("${"))
             result.append(r.read_param_expand_in_braces(false));
         else if (r.at('$'))
