@@ -762,7 +762,7 @@ string expand_command(const string &command)
     // TODO: Find something more elegant than redirecting to a file
 
     // The X-s will be replaced by mkstemp
-    char filename[] = "stdoutXXXXXX";
+    char filename[] = "/tmp/shell_stdoutXXXXXX";
     int new_stdout = mkstemp(filename);
     int old_stdout = dup(1);
 
@@ -781,10 +781,87 @@ string expand_command(const string &command)
     return result;
 }
 
+// Field splitting
+
+void field_split(vector<string> &fields, const string &str)
+{
+    const char *ifs = getenv("IFS");
+
+    if (!ifs)
+        ifs = " \t\n";
+    
+    if (strlen(ifs) == 0) {
+        fields.back().append(str);
+        return;
+    }
+
+    // IFS is separated into whitespace IFS (what we call soft IFS)
+    // and non-whitespace IFS (what we call hard IFS)
+    string soft_ifs;
+    string hard_ifs;
+
+    for (const char *c = ifs; *c; c++) {
+        if (isspace(*c))
+            soft_ifs.push_back(*c);
+        else
+            hard_ifs.push_back(*c);
+    }
+
+    // Soft IFS spans are merged together into a single delimiter,
+    // and are ignored at the beginning and end of input.
+    // Hard IFS aren't merged together, and can delimit empty fields.
+    // Hard IFS are merged with the soft IFS around them.
+    // Hard IFS at the beginning of the input cause an empty field.
+
+    enum class Mode {
+        START,          // We didn't yet start the first field
+        FIELD,          // We are in the middle of the field
+        SOFT_DELIMIT,   // In a soft IFS span
+        HARD_DELIMIT,   // In a span of soft IFS + one hard IFS char
+    };
+
+    Mode mode = fields.size() == 0 ? Mode::START : Mode::FIELD;
+
+    for (size_t i = 0; i < str.size(); i++) {
+        char c = str[i];
+
+        if (soft_ifs.find(c) != string::npos) {
+            if (mode == Mode::START)
+                ; // Ignore soft IFS at the beginning of input
+            if (mode == Mode::FIELD)
+                mode = Mode::SOFT_DELIMIT;
+        }
+        else if (hard_ifs.find(c) != string::npos) {
+            if (mode == Mode::START || mode == Mode::HARD_DELIMIT)
+                // Add an empty field
+                fields.push_back(string{});
+
+            mode = Mode::HARD_DELIMIT;
+        }
+        else {
+            if (mode != Mode::FIELD) {
+                // Begin new field
+                fields.push_back(string{});
+                mode = Mode::FIELD;
+            }
+
+            fields.back().push_back(c);
+        }
+    }
+}
+
+void field_append(vector<string> &fields, const string &str)
+{
+    if (fields.size())
+        fields.back().append(str);
+    else
+        fields.push_back(str);
+}
+
 vector<string> expand_word(const string &word)
 {
     Reader r(word);
-    string result;
+    vector<string> fields;
 
     // TODO: deal with variable assignments that support multiple tilde-prefixes
     if (r.at('~')) {
@@ -793,36 +870,36 @@ vector<string> expand_word(const string &word)
         // This works nicely when slash is string::npos
         string tilde_prefix = first_part.substr(1, slash - 1);
 
-        result.append(expand_tilde_prefix(tilde_prefix));
+        field_append(fields, expand_tilde_prefix(tilde_prefix));
 
         if (slash != string::npos)
-            result.append(first_part.substr(slash));
+            field_append(fields, first_part.substr(slash));
     }
 
     // TODO: Impelment the different expansions
 
     while (!r.eof()) {
         if (r.at('\\'))
-            result.append(r.read_slash_quote(false));
+            field_append(fields, r.read_slash_quote(false));
         else if (r.at('\''))
-            result.append(r.read_single_quote(false));
+            field_append(fields, r.read_single_quote(false));
         else if (r.at('\"'))
-            result.append(r.read_double_quote(false));
+            field_append(fields, r.read_double_quote(false));
         else if (r.at('`'))
-            result.append(expand_command(r.read_subshell_backquote(false)));
+            field_split(fields, expand_command(r.read_subshell_backquote(false)));
         else if (r.at("$(("))
-            result.append(r.read_arithmetic_expand(false));
+            field_split(fields, r.read_arithmetic_expand(false));
         else if (r.at("$("))
-            result.append(expand_command(r.read_subshell(false)));
+            field_split(fields, expand_command(r.read_subshell(false)));
         else if (r.at("${"))
-            result.append(r.read_param_expand_in_braces(false));
+            field_split(fields, r.read_param_expand_in_braces(false));
         else if (r.at('$'))
-            result.append(r.read_param_expand(false));
+            field_split(fields, r.read_param_expand(false));
         else
-            result.append(r.read_regular_part());
+            field_append(fields, r.read_regular_part());
     }
 
-    return {result};
+    return fields;
 }
 
 // Execution
