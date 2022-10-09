@@ -1263,15 +1263,13 @@ void repl()
     }
 }
 
-int main()
+int main(int argc, const char *argv[])
 {
-    // run_command("echo", {"hello", "world", "from echo"}, {});
-    // run_command("cat", {}, {redirection{0, "/etc/hostname", -1, RedirType::INPUT}});
-    // run_command("echo", {"test redirection"}, {redirection{1, "/tmp/redir1", -1, RedirType::OUTPUT}});
-    // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
-    // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
-    // run_command("echo", {"test append"}, {redirection{1, "/tmp/redir2", -1, RedirType::APPEND}});
-    // run_command("echo", {"test dup"}, {redirection{1, nullptr, 2, RedirType::INPUT_DUP}});
+    if (argc == 3 && strcmp(argv[1], "-c") == 0) {
+        // TODO: Robust argument parsing
+        execute(argv[2]);
+        return 0;
+    }
 
     repl();
     return 0;
