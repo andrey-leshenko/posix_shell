@@ -228,20 +228,24 @@ public:
             result.push_back('"');
         
         while (!eof() && !at('"')) {
-            if (at("\\$") || at("\\`") || at("\\\"") || at("\\\\")) {
-                // Only allowed escapes inside double quotes
+            if (at("\\\"")) {
+                // This slash is no longer needed when we remove quotes
                 pop();
                 if (keep_quotes)
                     result.push_back('\\');
+                result.push_back(pop());
+            }
+            else if (at("\\$") || at("\\`") || at("\\\\")) {
+                // This slash still carries meaning
+                result.push_back(pop());
                 result.push_back(pop());
             }
             else if (at('`'))
                 result.append(read_subshell_backquote(true));
             else if (at("$"))
                 result.append(read_dollar(true));
-            else {
+            else
                 result.push_back(pop());
-            }
         }
         
         if (eof())
@@ -289,6 +293,7 @@ public:
     {
         return read_recursive("$(", ")", "(", ")", keep_quotes);
     }
+
     string read_subshell_backquote(bool keep_quotes)
     {
         string result;
@@ -298,11 +303,16 @@ public:
             result.push_back('`');
         
         while (!eof() && !at('`')) {
-            if (at("\\$") || at("\\`") || at("\\\\")) {
-                // The only cases when backslash is special
+            if (at("\\`")) {
+                // This slash is no longer needed when we remove quotes
                 pop();
                 if (keep_quotes)
                     result.push_back('\\');
+                result.push_back(pop());
+            }
+            else if (at("\\$") || at("\\\\")) {
+                // This slash still carries meaning
+                result.push_back(pop());
                 result.push_back(pop());
             }
             else
@@ -850,12 +860,39 @@ void field_split(vector<string> &fields, const string &str)
     }
 }
 
+void field_append(vector<string> &fields, char c)
+{
+    if (fields.size())
+        fields.back().push_back(c);
+    else
+        fields.push_back(string{c});
+}
+
 void field_append(vector<string> &fields, const string &str)
 {
     if (fields.size())
         fields.back().append(str);
     else
         fields.push_back(str);
+}
+
+string expand_dollar_or_backquote(Reader &r)
+{
+    if (r.at("$(("))
+        //return r.read_arithmetic_expand(false);
+        panic("arithmetic expansion not implemented");
+    else if (r.at("$("))
+        return expand_command(r.read_subshell(false));
+    else if (r.at("${"))
+        //return r.read_param_expand_in_braces(false);
+        panic("parameter expansion not implemented");
+    else if (r.at('$'))
+        //return r.read_param_expand(false);
+        panic("parameter expansion not implemented");
+    else if (r.at('`'))
+        return expand_command(r.read_subshell_backquote(false));
+    else
+        assert(0);
 }
 
 vector<string> expand_word(const string &word)
@@ -879,22 +916,35 @@ vector<string> expand_word(const string &word)
     // TODO: Impelment the different expansions
 
     while (!r.eof()) {
-        if (r.at('\\'))
+        if (r.at('\\')) {
             field_append(fields, r.read_slash_quote(false));
-        else if (r.at('\''))
+        }
+        else if (r.at('\'')) {
+            // Empty Quotes create empty field
+            if (fields.size() == 0)
+                fields.push_back(string{});
+
             field_append(fields, r.read_single_quote(false));
-        else if (r.at('\"'))
-            field_append(fields, r.read_double_quote(false));
-        else if (r.at('`'))
-            field_split(fields, expand_command(r.read_subshell_backquote(false)));
-        else if (r.at("$(("))
-            field_split(fields, r.read_arithmetic_expand(false));
-        else if (r.at("$("))
-            field_split(fields, expand_command(r.read_subshell(false)));
-        else if (r.at("${"))
-            field_split(fields, r.read_param_expand_in_braces(false));
-        else if (r.at('$'))
-            field_split(fields, r.read_param_expand(false));
+        }
+        else if (r.at('\"')) {
+            string inner_data = r.read_double_quote(false);
+            Reader r(inner_data);
+
+            // Empty Quotes create empty field
+            if (fields.size() == 0)
+                fields.push_back(string{});
+
+            while (!r.eof()) {
+                if (r.at("\\$") || r.at("\\`") || r.at("\\\\"))
+                    field_append(fields, string{"\\"} + r.pop());
+                else if (r.at('$') || r.at('`'))
+                    field_append(fields, expand_dollar_or_backquote(r));
+                else
+                    field_append(fields, r.pop());
+            }
+        }
+        else if (r.at('$') || r.at('`'))
+            field_split(fields, expand_dollar_or_backquote(r));
         else
             field_append(fields, r.read_regular_part());
     }
