@@ -15,10 +15,13 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <memory>
+#include <variant>
 
 using std::vector;
 using std::string;
 using std::map;
+using std::variant;
 
 #define _C(X) X
 
@@ -71,6 +74,8 @@ vector<string> special_chars
     ";",
     "<",
     ">",
+    "(",
+    ")",
 };
 
 vector<string> reserved_words
@@ -489,7 +494,7 @@ class TokenReader
     string token;
     bool is_io_number;
 
-    TokenType token_type()
+    TokenType token_type(bool parse_reserved)
     {
         if (is_io_number)
             return TokenType::IO_NUMBER;
@@ -505,9 +510,10 @@ class TokenReader
             return TokenType::SPECIAL_CHAR;
         }
 
-        // TODO: Apply this only for command name
-        if (std::find(reserved_words.begin(), reserved_words.end(), token) != reserved_words.end()) {
-            return TokenType::RESERVED_WORD;
+        if (parse_reserved) {
+            if (std::find(reserved_words.begin(), reserved_words.end(), token) != reserved_words.end()) {
+                return TokenType::RESERVED_WORD;
+            }
         }
 
         return TokenType::WORD;
@@ -539,19 +545,43 @@ public:
     }
     string pop(TokenType expected_type)
     {
-        if (expected_type != token_type())
+        if (expected_type != token_type(false))
             panic("unexpected token type");
         return pop();
     }
 
     bool at(TokenType type)
     {
-        return !eof() && token_type() == type;
+        return !eof() && token_type(false) == type;
     }
 
     bool at(TokenType type, const char *value)
     {
         return at(type) && token == value;
+    }
+
+    // TODO: Simplify the reserved/unreserved code
+
+    bool at_reserved(TokenType type)
+    {
+        return !eof() && token_type(true) == type;
+    }
+
+    bool at_reserved(TokenType type, const char *value)
+    {
+        return at_reserved(type) && token == value;
+    }
+
+    void eat_reserved(TokenType type, const char *value)
+    {
+        if (!at_reserved(type, value)) {
+            if (eof())
+                printf("syntax error near unexpected EOF\n");
+            else
+                printf("syntax error near unexpected token %s\n", token.c_str());
+            panic("could not eat token");
+        }
+        pop();
     }
 };
 
@@ -562,6 +592,13 @@ struct ast_redirect
     string rhs;
 };
 
+struct ast_and_or;
+
+struct ast_compound_list
+{
+    vector<ast_and_or> and_ors;
+};
+
 struct ast_simple_command
 {
     vector<string> assignments;
@@ -569,9 +606,37 @@ struct ast_simple_command
     vector<ast_redirect> redirections;
 };
 
+struct ast_brace_group
+{
+    ast_compound_list commands;
+};
+
+struct ast_subshell
+{
+    ast_compound_list commands;
+};
+
+struct ast_if_clause
+{
+    vector<ast_compound_list> conditions;
+    vector<ast_compound_list> bodies;
+};
+
+struct ast_while_clause
+{
+    ast_compound_list condition;
+    ast_compound_list body;
+    bool until = false;
+};
+
 struct ast_command
 {
-    ast_simple_command cmd;
+    variant<
+        ast_simple_command,
+        ast_brace_group,
+        ast_subshell,
+        ast_if_clause,
+        ast_while_clause> cmd;
 };
 
 struct ast_pipeline
@@ -670,10 +735,73 @@ ast_simple_command parse_simple_command(TokenReader &r)
     return simple_command;
 }
 
+ast_compound_list parse_compound_list(TokenReader &r);
+
+ast_brace_group parse_brace_group(TokenReader &r)
+{
+    ast_brace_group brace_group;
+
+    r.eat_reserved(TokenType::RESERVED_WORD, "{");
+    brace_group.commands = parse_compound_list(r);
+    r.eat_reserved(TokenType::RESERVED_WORD, "}");
+
+    return brace_group;
+}
+
+ast_if_clause parse_if_clause(TokenReader &r)
+{
+    ast_if_clause if_clause;
+
+    r.eat_reserved(TokenType::RESERVED_WORD, "if");
+
+    do {
+        if_clause.conditions.push_back(parse_compound_list(r));
+        r.eat_reserved(TokenType::RESERVED_WORD, "then");
+        if_clause.bodies.push_back(parse_compound_list(r));
+    } while(r.at_reserved(TokenType::RESERVED_WORD, "elif"));
+
+    if (r.at_reserved(TokenType::RESERVED_WORD, "else")) {
+        r.pop();
+        if_clause.bodies.push_back(parse_compound_list(r));
+    }
+    r.eat_reserved(TokenType::RESERVED_WORD, "fi");
+
+    return if_clause;
+}
+
+ast_while_clause parse_while_clause(TokenReader &r)
+{
+    ast_while_clause while_clause;
+
+    while_clause.until = r.at_reserved(TokenType::RESERVED_WORD, "until");
+    r.pop();
+    while_clause.condition = parse_compound_list(r);
+    r.eat_reserved(TokenType::RESERVED_WORD, "do");
+    while_clause.body = parse_compound_list(r);
+    r.eat_reserved(TokenType::RESERVED_WORD, "done");
+
+    return while_clause;
+}
+
 ast_command parse_command(TokenReader &r)
 {
     ast_command command;
-    command.cmd = parse_simple_command(r);
+
+    if (r.at_reserved(TokenType::RESERVED_WORD, "{"))
+        command.cmd = parse_brace_group(r);
+    else if (r.at_reserved(TokenType::SPECIAL_CHAR, "("))
+        panic("unimplemented");
+    else if (r.at_reserved(TokenType::RESERVED_WORD, "for"))
+        panic("unimplemented");
+    else if (r.at_reserved(TokenType::RESERVED_WORD, "case"))
+        panic("unimplemented");
+    else if (r.at_reserved(TokenType::RESERVED_WORD, "if"))
+        command.cmd = parse_if_clause(r);
+    else if (r.at_reserved(TokenType::RESERVED_WORD, "while") || r.at_reserved(TokenType::RESERVED_WORD, "until"))
+        command.cmd = parse_while_clause(r);
+    else
+        command.cmd = parse_simple_command(r);
+
     return command;
 }
 
@@ -724,6 +852,33 @@ ast_and_or parse_and_or(TokenReader &r)
     }
 
     return and_or;
+}
+
+bool at_compound_list_end(TokenReader &r)
+{
+    return r.at_reserved(TokenType::SPECIAL_CHAR, ")")
+        || r.at_reserved(TokenType::RESERVED_WORD, "then")
+        || r.at_reserved(TokenType::RESERVED_WORD, "else")
+        || r.at_reserved(TokenType::RESERVED_WORD, "elif")
+        || r.at_reserved(TokenType::RESERVED_WORD, "fi")
+        || r.at_reserved(TokenType::RESERVED_WORD, "do")
+        || r.at_reserved(TokenType::RESERVED_WORD, "done")
+        || r.at_reserved(TokenType::RESERVED_WORD, "esac")
+        || r.at_reserved(TokenType::RESERVED_WORD, "}");
+}
+
+ast_compound_list parse_compound_list(TokenReader &r)
+{
+    ast_compound_list compound_list;
+
+    parse_skip_linebreak(r);
+
+    while (!r.eof() && !at_compound_list_end(r)) {
+        compound_list.and_ors.push_back(parse_and_or(r));
+        parse_skip_linebreak(r);
+    }
+
+    return compound_list;
 }
 
 ast_program parse_program(TokenReader &r)
@@ -1045,9 +1200,52 @@ int execute_simple_command(const ast_simple_command &simple_command)
     panic("execve failed");
 }
 
+int execute_compound_list(const ast_compound_list &compound_list);
+
+int execute_if_clause(const ast_if_clause &if_clause)
+{
+    for (size_t i = 0; i < if_clause.conditions.size(); i++)
+        if (execute_compound_list(if_clause.conditions[i]) == 0)
+            return execute_compound_list(if_clause.bodies[i]);
+    
+    // Else
+    if (if_clause.bodies.size() > if_clause.conditions.size()) {
+        assert(if_clause.bodies.size() == if_clause.conditions.size() + 1);
+        return execute_compound_list(if_clause.bodies.back());
+    }
+    else {
+        return 0;
+    }
+}
+
+int execute_while_clause(const ast_while_clause &while_clause)
+{
+    int exit_status = 0;
+
+    while ((execute_compound_list(while_clause.condition) == 0) == !while_clause.until) {
+        exit_status = execute_compound_list(while_clause.body);
+    }
+
+    return exit_status;
+}
+
 int execute_command(const ast_command &command)
 {
-    return execute_simple_command(command.cmd);
+    if (std::holds_alternative<ast_simple_command>(command.cmd)) {
+        return execute_simple_command(std::get<ast_simple_command>(command.cmd));
+    }
+    else if (std::holds_alternative<ast_brace_group>(command.cmd)) {
+        return execute_compound_list(std::get<ast_brace_group>(command.cmd).commands);
+    }
+    else if (std::holds_alternative<ast_if_clause>(command.cmd)) {
+        return execute_if_clause(std::get<ast_if_clause>(command.cmd));
+    }
+    else if (std::holds_alternative<ast_while_clause>(command.cmd)) {
+        return execute_while_clause(std::get<ast_while_clause>(command.cmd));
+    }
+    else {
+        panic("command type execution not implemented");
+    }
 }
 
 int execute_pipeline(const ast_pipeline &pipeline)
@@ -1135,6 +1333,17 @@ int execute_and_or(const ast_and_or &and_or)
         }
 
         exit_status = execute_pipeline(and_or.pipelines[i]);
+    }
+
+    return exit_status;
+}
+
+int execute_compound_list(const ast_compound_list &compound_list)
+{
+    int exit_status = 0;
+
+    for (const ast_and_or& and_or : compound_list.and_ors) {
+        exit_status = execute_and_or(and_or);
     }
 
     return exit_status;

@@ -24,6 +24,7 @@ TESTS = [
 
     # Multiple commands
     r'echo 1;echo 2 ;echo 3 ; echo 4',
+    #r'echo 1 ; ; ; ; echo 2',
 
     # And or
     r'false && echo foo || echo bar',
@@ -73,7 +74,10 @@ TESTS = [
 
     # reserved words
 
-    # r'echo ! { } case do done elif else esac fi for if in then until while',
+    r'echo ! { } case do done elif else esac fi for if in then until while',
+
+    # if
+    r'if false; then echo true; else echo false; fi'
 ]
 
 def run_test(command):
