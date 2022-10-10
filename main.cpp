@@ -1148,8 +1148,12 @@ void execute_redirect(const ast_redirect &redirect)
             flags = O_RDWR | O_CREAT;
         else
             assert(0);
+        
+        vector<string> results = expand_word(redirect.rhs);
+        if (results.size() != 1)
+            panic("ambiguous redirect");
 
-        int right_fd = open(redirect.rhs.c_str(), flags, 0666);
+        int right_fd = open(results[0].c_str(), flags, 0666);
         if (right_fd < 0)
             panic("redirect file open failed");
         dup2(right_fd, left_fd);
