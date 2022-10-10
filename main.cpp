@@ -699,37 +699,44 @@ ast_redirect parse_redirect(TokenReader &r)
     return redirect;
 }
 
+bool at_assignment_word(TokenReader &r)
+{
+    if (!r.at(TokenType::WORD))
+        return false;
+
+    string word = r.peek();
+    size_t equals_index = word.find_first_of('=');
+
+    if (equals_index == string::npos || equals_index == 0)
+        return false;
+    
+    for (size_t i = 0; i < equals_index; i++)
+        if (!isalnum(word[i]) && word[i] != '_')
+            return false;
+    
+    return true;
+}
+
 ast_simple_command parse_simple_command(TokenReader &r)
 {
     ast_simple_command simple_command;
 
-    // r.set_rule(GrammarRule::PRE_COMMAND_ASSIGNMENT);
-
     while (true) {
-        // if (r.at(TokenType::ASSIGNMENT_WORD)) {
-        //     simple_command.assignments.push_back(r.pop());
-        // }
-        // else if (at_redirect(r)) {
-        if (at_redirect(r)) {
+        if (at_assignment_word(r))
+            simple_command.assignments.push_back(r.pop());
+        else if (at_redirect(r))
             simple_command.redirections.push_back(parse_redirect(r));
-        }
-        else {
+        else
             break;
-        }
     }
 
-    // r.clear_rule();
-
     while (true) {
-        if (r.at(TokenType::WORD)) {
+        if (r.at(TokenType::WORD))
             simple_command.args.push_back(r.pop());
-        }
-        else if (at_redirect(r)) {
+        else if (at_redirect(r))
             simple_command.redirections.push_back(parse_redirect(r));
-        }
-        else {
+        else
             break;
-        }
     }
 
     return simple_command;
@@ -895,6 +902,57 @@ ast_program parse_program(TokenReader &r)
     return program;
 }
 
+// Shell Execution environment
+
+struct var
+{
+    string value;
+    bool exported;
+};
+
+class ex_env
+{
+    map<string, var> vars;
+
+public:
+    bool contains(const string &name)
+    {
+        return vars.find(name) != vars.end();
+    }
+
+    const string &get(const string &name)
+    {
+        return vars.at(name).value;
+    }
+    
+    void set(const string &name, const string &value)
+    {
+        vars[name].value = value;
+    }
+
+    void mark_export(const string &name)
+    {
+        vars[name].exported = true;
+    }
+
+    void init_from_environ()
+    {
+        for (char **s = environ; *s; s++) {
+            char *equals = strchr(*s, '=');
+            if (!equals)
+                continue;
+            
+            string name = string(*s, equals - *s);
+            const char *value = equals + 1;
+
+            set(name, value);
+            mark_export(name);
+        }
+    }
+};
+
+ex_env xenv;
+
 // Expansion
 
 string expand_tilde_prefix(const string &tilde_prefix)
@@ -944,6 +1002,14 @@ string expand_command(const string &command)
         result.pop_back();
 
     return result;
+}
+
+string expand_param(const string &param)
+{
+    if (!xenv.contains(param))
+        return "";
+    
+    return xenv.get(param);
 }
 
 // Field splitting
@@ -1042,8 +1108,7 @@ string expand_dollar_or_backquote(Reader &r)
         //return r.read_param_expand_in_braces(false);
         panic("parameter expansion not implemented");
     else if (r.at('$'))
-        //return r.read_param_expand(false);
-        panic("parameter expansion not implemented");
+        return expand_param(r.read_param_expand(false));
     else if (r.at('`'))
         return expand_command(r.read_subshell_backquote(false));
     else
@@ -1161,11 +1226,27 @@ void execute_redirect(const ast_redirect &redirect)
     }
 }
 
+void execute_assignment(const string &assignment_word)
+{
+    size_t equals = assignment_word.find_first_of('=');
+    assert(equals != string::npos);
+
+    vector<string> value_parts = expand_word(assignment_word.substr(equals + 1));
+    string value;
+
+    if (value_parts.size() == 0)
+        value = string();
+    else if (value_parts.size() == 1)
+        value = value_parts[0];
+    else
+        // TODO: decide how to handle this case
+        panic("assignment of multiple fields");
+
+    xenv.set(assignment_word.substr(0, equals), value);
+}
+
 int execute_simple_command(const ast_simple_command &simple_command)
 {
-    if (simple_command.assignments.size())
-        panic("not implemented");
-    
     vector<string> expanded_args;
 
     for (const string &word : simple_command.args) {
@@ -1173,35 +1254,47 @@ int execute_simple_command(const ast_simple_command &simple_command)
         expanded_args.insert(expanded_args.end(), fields.begin(), fields.end());
     }
 
+    if (expanded_args.size() > 0) {
+        pid_t pid = fork();
+
+        if (pid < 0) {
+            panic("fork failed");
+        }
+
+        if (pid > 0) {
+            // Parent
+            int wstatus;
+            waitpid(pid, &wstatus, 0);
+            return WEXITSTATUS(wstatus);
+        }
+    }
+    else {
+        // When there is no command to execute, we don't fork so the assignments
+        // will change the current execution environment.
+    }
+
     for (const ast_redirect &redirect : simple_command.redirections)
         execute_redirect(redirect);
+
+    for (const string &assignment : simple_command.assignments)
+        execute_assignment(assignment);
     
-    pid_t pid = fork();
+    if (expanded_args.size() > 0) {
+        // Child
+        vector<const char*> argv;
+        for (auto& arg : expanded_args)
+            argv.push_back(arg.c_str());
+        argv.push_back(nullptr);
 
-    if (pid < 0) {
-        panic("fork failed");
+        // execve doesn't modify its arguments, so it should be safe
+        char ** argv_ptr = const_cast<char **>(&argv[0]);
+
+        execvp(argv[0], argv_ptr);
+        panic("execve failed");
     }
-
-    if (pid > 0) {
-        // Parent
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-        return WEXITSTATUS(wstatus);
+    else {
+        return 0;
     }
-
-    // Child
-    vector<const char*> argv;
-
-    for (auto& arg : expanded_args)
-        argv.push_back(arg.c_str());
-
-    argv.push_back(nullptr);
-
-    // execve doesn't modify its arguments, so it should be safe
-    char ** argv_ptr = const_cast<char **>(&argv[0]);
-
-    execvp(argv[0], argv_ptr);
-    panic("execve failed");
 }
 
 int execute_compound_list(const ast_compound_list &compound_list);
@@ -1254,12 +1347,21 @@ int execute_command(const ast_command &command)
 
 int execute_pipeline(const ast_pipeline &pipeline)
 {
+    int exit_status = 0;
+    
     int rpipe[2] = {-1, -1};
     int wpipe[2] = {-1, -1};
 
     vector<pid_t> pids;
 
     const vector<ast_command> &commands = pipeline.commands;
+
+    if (commands.size() == 1) {
+        // This is both an optimization, and it is required for variable
+        // assignments to modify the current execution environment.
+        exit_status = execute_command(commands[0]);
+        goto ret;
+    }
     
     for (size_t i = 0; i < commands.size(); i++) {
         rpipe[0] = wpipe[0];
@@ -1306,15 +1408,18 @@ int execute_pipeline(const ast_pipeline &pipeline)
         close(wpipe[1]);
     }
 
-    int exit_status = 0;
-
     for (auto pid : pids) {
         int wstatus;
         waitpid(pid, &wstatus, 0);
         exit_status = WEXITSTATUS(wstatus);
     }
 
-    return exit_status;   
+ret:
+
+    if (pipeline.invert_exit_code)
+        return !exit_status;
+    else
+        return exit_status;
 }
 
 int execute_and_or(const ast_and_or &and_or)
@@ -1478,6 +1583,8 @@ void repl()
 
 int main(int argc, const char *argv[])
 {
+    xenv.init_from_environ();
+
     if (argc == 3 && strcmp(argv[1], "-c") == 0) {
         // TODO: Robust argument parsing
         execute(argv[2]);
