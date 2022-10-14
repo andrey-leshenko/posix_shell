@@ -74,17 +74,6 @@ vector<string> operators
     ")",
 };
 
-vector<string> special_chars
-{
-    "&",
-    "|",
-    ";",
-    "<",
-    ">",
-    "(",
-    ")",
-};
-
 vector<string> reserved_words
 {
     "if",
@@ -497,10 +486,14 @@ public:
 class TokenReader
 {
     Reader r;
+    // Token already read from the reader
     string token;
     bool is_io_number;
+    // Another token for lookahead purposes
+    string extra_token;
+    bool extra_is_io_number;
 
-    TokenType token_type(bool parse_reserved)
+    TokenType token_type(const string &token, bool is_io_number, bool parse_reserved)
     {
         if (is_io_number)
             return TokenType::IO_NUMBER;
@@ -522,6 +515,7 @@ class TokenReader
     }
 
 public:
+
     TokenReader(const Reader &r)
         : r{r}
     {
@@ -529,54 +523,48 @@ public:
         pop();
     }
 
-    bool eof()
-    {
-        return token.size() == 0;
-    }
+    bool eof() { return token.size() == 0; }
 
-    string peek()
-    {
-        return token;
-    }
+    string peek() { return token; }
 
     string pop()
     {
         string result = token;
-        token = this->r.read_token(&is_io_number);
+
+        if (extra_token.size()) {
+            token = extra_token;
+            extra_token.clear();
+            is_io_number = extra_is_io_number;
+        }
+        else {
+            token = this->r.read_token(&is_io_number);
+        }
+
         return result;
     }
-    string pop(TokenType expected_type)
+
+private:
+
+    string _pop(TokenType expected_type, bool parse_reserved)
     {
-        if (expected_type != token_type(false))
+        if (expected_type != token_type(token, is_io_number, parse_reserved))
             panic("unexpected token type");
         return pop();
     }
 
-    bool at(TokenType type)
+    bool _at(TokenType type, bool parse_reserved)
     {
-        return !eof() && token_type(false) == type;
+        return !eof() && token_type(token, is_io_number, parse_reserved) == type;
     }
 
-    bool at(TokenType type, const char *value)
+    bool _at(TokenType type, const char *value, bool parse_reserved)
     {
-        return at(type) && token == value;
+        return _at(type, parse_reserved) && token == value;
     }
 
-    // TODO: Simplify the reserved/unreserved code
-
-    bool at_reserved(TokenType type)
+    void _eat(TokenType type, const char *value, bool parse_reserved)
     {
-        return !eof() && token_type(true) == type;
-    }
-
-    bool at_reserved(TokenType type, const char *value)
-    {
-        return at_reserved(type) && token == value;
-    }
-
-    void eat_reserved(TokenType type, const char *value)
-    {
-        if (!at_reserved(type, value)) {
+        if (!_at(type, value, parse_reserved)) {
             if (eof())
                 printf("syntax error near unexpected EOF\n");
             else
@@ -584,6 +572,31 @@ public:
             panic("could not eat token");
         }
         pop();
+    }
+
+public:
+
+    string pop(TokenType expected_type) { return _pop(expected_type, false); }
+    string pop_reserved(TokenType expected_type) { return _pop(expected_type, true); }
+
+    bool at(TokenType type) { return _at(type, false); }
+    bool at_reserved(TokenType type) { return _at(type, true); }
+
+    bool at(TokenType type, const char *value) { return _at(type, value, false); }
+    bool at_reserved(TokenType type, const char *value) { return _at(type, value, true); }
+
+    void eat(TokenType type, const char *value) { _eat(type, value, false); }
+    void eat_reserved(TokenType type, const char *value) { _eat(type, value, true); }
+
+    // This exists just so we could parse function definitions
+    bool at_lookahead(TokenType type, const char *value)
+    {
+        if (extra_token.size() == 0)
+            extra_token = this->r.read_token(&extra_is_io_number);
+
+        return extra_token.size() != 0
+            && token_type(extra_token, extra_is_io_number, false) == type
+            && extra_token == value;
     }
 };
 
@@ -645,6 +658,12 @@ struct ast_while_clause
     bool until = false;
 };
 
+struct ast_function_definition
+{
+    string name;
+    ast_brace_group body;
+};
+
 struct ast_command
 {
     variant<
@@ -654,7 +673,8 @@ struct ast_command
         ast_for_clause,
         ast_case_clause,
         ast_if_clause,
-        ast_while_clause> cmd;
+        ast_while_clause,
+        ast_function_definition> cmd;
 };
 
 struct ast_pipeline
@@ -884,6 +904,20 @@ ast_while_clause parse_while_clause(TokenReader &r)
     return while_clause;
 }
 
+ast_function_definition parse_function_definition(TokenReader &r)
+{
+    ast_function_definition function_definition;
+
+    function_definition.name = r.pop_reserved(TokenType::WORD);
+    r.eat(TokenType::OPERATOR, "(");
+    r.eat(TokenType::OPERATOR, ")");
+    parse_skip_linebreak(r);
+    // TODO: Allow other compound commands as body
+    function_definition.body = parse_brace_group(r);
+
+    return function_definition;
+}
+
 ast_command parse_command(TokenReader &r)
 {
     ast_command command;
@@ -900,6 +934,8 @@ ast_command parse_command(TokenReader &r)
         command.cmd = parse_if_clause(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "while") || r.at_reserved(TokenType::RESERVED_WORD, "until"))
         command.cmd = parse_while_clause(r);
+    else if (r.at_reserved(TokenType::WORD) && r.at_lookahead(TokenType::OPERATOR, "("))
+        command.cmd = parse_function_definition(r);
     else
         command.cmd = parse_simple_command(r);
 
@@ -1006,19 +1042,20 @@ struct var
 class ex_env
 {
     map<string, var> vars;
+    map<string, ast_function_definition> functions;
 
 public:
-    bool contains(const string &name)
+    bool has_var(const string &name)
     {
         return vars.find(name) != vars.end();
     }
 
-    const string &get(const string &name)
+    const string &get_var(const string &name)
     {
         return vars.at(name).value;
     }
     
-    void set(const string &name, const string &value)
+    void set_var(const string &name, const string &value)
     {
         vars[name].value = value;
     }
@@ -1038,9 +1075,24 @@ public:
             string name = string(*s, equals - *s);
             const char *value = equals + 1;
 
-            set(name, value);
+            set_var(name, value);
             mark_export(name);
         }
+    }
+
+    void set_func(const string &name, const ast_function_definition &value)
+    {
+        functions[name] = value;
+    }
+
+    bool has_func(const string &name)
+    {
+        return functions.find(name) != functions.end();
+    }
+
+    const ast_function_definition &get_func(const string &name)
+    {
+        return functions.at(name);
     }
 };
 
@@ -1093,10 +1145,10 @@ string expand_command(const string &command)
 
 string expand_param(const string &param)
 {
-    if (!xenv.contains(param))
+    if (!xenv.has_var(param))
         return "";
     
-    return xenv.get(param);
+    return xenv.get_var(param);
 }
 
 // Field splitting
@@ -1337,6 +1389,7 @@ void execute_redirect(const ast_redirect &redirect)
 
 void execute_assignment(const string &assignment_word)
 {
+    // TODO: Handle exporting of variables when assigning before simple command
     size_t equals = assignment_word.find_first_of('=');
     assert(equals != string::npos);
 
@@ -1351,12 +1404,24 @@ void execute_assignment(const string &assignment_word)
         // TODO: decide how to handle this case
         panic("assignment of multiple fields");
 
-    xenv.set(assignment_word.substr(0, equals), value);
+    xenv.set_var(assignment_word.substr(0, equals), value);
+}
+
+int execute_compound_list(const ast_compound_list &compound_list);
+
+int execute_function_call(const ast_function_definition &function_definition)
+{
+    return execute_compound_list(function_definition.body.commands);
 }
 
 int execute_simple_command(const ast_simple_command &simple_command)
 {
     vector<string> expanded_args = expand_words(simple_command.args);
+
+    if (expanded_args.size() > 0 && xenv.has_func(expanded_args[0])) {
+        // TODO: Still do temporary assignments and redirections for function calls
+        return execute_function_call(xenv.get_func(expanded_args[0]));
+    }
 
     if (expanded_args.size() > 0) {
         pid_t pid = fork();
@@ -1401,8 +1466,6 @@ int execute_simple_command(const ast_simple_command &simple_command)
     }
 }
 
-int execute_compound_list(const ast_compound_list &compound_list);
-
 int execute_subshell(const ast_subshell &subshell)
 {
     pid_t pid = fork();
@@ -1429,7 +1492,7 @@ int execute_for_clause(const ast_for_clause &for_clause)
         panic("for with no wordlist not implemented");
 
     for (const string &word : expand_words(for_clause.wordlist)) {
-        xenv.set(for_clause.var_name, word);
+        xenv.set_var(for_clause.var_name, word);
         exit_status = execute_compound_list(for_clause.body);
     }
 
@@ -1492,6 +1555,13 @@ int execute_while_clause(const ast_while_clause &while_clause)
     return exit_status;
 }
 
+int execute_function_definition(const ast_function_definition &function_definition)
+{
+    xenv.set_func(function_definition.name, function_definition);
+
+    return 0;
+}
+
 int execute_command(const ast_command &command)
 {
     if (std::holds_alternative<ast_simple_command>(command.cmd)) {
@@ -1514,6 +1584,9 @@ int execute_command(const ast_command &command)
     }
     else if (std::holds_alternative<ast_while_clause>(command.cmd)) {
         return execute_while_clause(std::get<ast_while_clause>(command.cmd));
+    }
+    else if (std::holds_alternative<ast_function_definition>(command.cmd)) {
+        return execute_function_definition(std::get<ast_function_definition>(command.cmd));
     }
     else {
         panic("command type execution not implemented");

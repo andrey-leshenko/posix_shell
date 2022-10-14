@@ -62,6 +62,8 @@ TESTS = [
     r'echo $A ; echo $(A=123) ; echo $A',
     r'echo $A ; echo `A=123` ; echo $A',
     r'echo $A ; (A=123) ; echo $A',
+    r'A=123 echo $A ; echo $A',
+    r"A=123 bash -c 'echo $A' ; echo $A",
 
     # quoting
 
@@ -94,6 +96,14 @@ TESTS = [
     r'case 4 in 1) echo A ;; (2) echo B ;; 3) echo C ;; esac',
     r'case 4 in 1) echo A ;; (2) echo B ;; 3|4) echo C ;; esac',
     r"""case "a b" in a) echo A ;; (b) echo B ;; 'a b') echo C ;; esac""",
+
+    # functions
+
+    r'foo() { echo 123; }',
+    r'foo() { bar; } ; bar ( ) { echo baar; }',
+    r'A=3 ; foo() { echo $A; }',
+    r'A=3 ; A=100 foo() { echo $A; }',
+    r'foo() { echo aaa; } ; foo 1>&2',
 ]
 
 def run_test(command):
