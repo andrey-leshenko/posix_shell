@@ -83,7 +83,11 @@ TESTS = [
     r'echo ! { } case do done elif else esac fi for if in then until while',
 
     # if
-    r'if false; then echo true; else echo false; fi'
+    r'if false; then echo true; else echo false; fi',
+
+    # for
+    r'for x in 1 2 3; do echo $x; done',
+    r'for x in 1$(echo 1 2 3)3; do echo $x; done'
 ]
 
 def run_test(command):

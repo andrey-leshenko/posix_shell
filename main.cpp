@@ -618,6 +618,13 @@ struct ast_subshell
     ast_compound_list commands;
 };
 
+struct ast_for_clause
+{
+    string name;
+    vector<string> wordlist;
+    ast_compound_list body;
+};
+
 struct ast_if_clause
 {
     vector<ast_compound_list> conditions;
@@ -637,6 +644,7 @@ struct ast_command
         ast_simple_command,
         ast_brace_group,
         ast_subshell,
+        ast_for_clause,
         ast_if_clause,
         ast_while_clause> cmd;
 };
@@ -768,6 +776,31 @@ ast_subshell parse_subshell(TokenReader &r)
     return subshell;
 }
 
+ast_for_clause parse_for_clause(TokenReader &r)
+{
+    ast_for_clause for_clause;
+
+    r.eat_reserved(TokenType::RESERVED_WORD, "for");
+    for_clause.name = r.pop(TokenType::WORD);
+    parse_skip_linebreak(r);
+
+    if (r.at_reserved(TokenType::RESERVED_WORD, "in")) {
+        r.pop();
+        while (r.at(TokenType::WORD))
+            for_clause.wordlist.push_back(r.pop());
+    }
+
+    if (r.at(TokenType::OPERATOR, ";"))
+        r.pop();
+    parse_skip_linebreak(r);
+
+    r.eat_reserved(TokenType::RESERVED_WORD, "do");
+    for_clause.body = parse_compound_list(r);
+    r.eat_reserved(TokenType::RESERVED_WORD, "done");
+
+    return for_clause;
+}
+
 ast_if_clause parse_if_clause(TokenReader &r)
 {
     ast_if_clause if_clause;
@@ -812,7 +845,7 @@ ast_command parse_command(TokenReader &r)
     else if (r.at_reserved(TokenType::OPERATOR, "("))
         command.cmd = parse_subshell(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "for"))
-        panic("unimplemented");
+        command.cmd = parse_for_clause(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "case"))
         panic("unimplemented");
     else if (r.at_reserved(TokenType::RESERVED_WORD, "if"))
@@ -1177,6 +1210,18 @@ vector<string> expand_word(const string &word)
     return fields;
 }
 
+vector<string> expand_words(const vector<string> &words)
+{
+    vector<string> expanded;
+
+    for (const string &word : words) {
+        vector<string> fields = expand_word(word);
+        expanded.insert(expanded.end(), fields.begin(), fields.end());
+    }
+
+    return expanded;
+}
+
 // Execution
 
 void execute_redirect(const ast_redirect &redirect)
@@ -1252,12 +1297,7 @@ void execute_assignment(const string &assignment_word)
 
 int execute_simple_command(const ast_simple_command &simple_command)
 {
-    vector<string> expanded_args;
-
-    for (const string &word : simple_command.args) {
-        vector<string> fields = expand_word(word);
-        expanded_args.insert(expanded_args.end(), fields.begin(), fields.end());
-    }
+    vector<string> expanded_args = expand_words(simple_command.args);
 
     if (expanded_args.size() > 0) {
         pid_t pid = fork();
@@ -1322,6 +1362,21 @@ int execute_subshell(const ast_subshell &subshell)
     exit(execute_compound_list(subshell.commands));
 }
 
+int execute_for_clause(const ast_for_clause &for_clause)
+{
+    int exit_status = 0;
+
+    if (for_clause.wordlist.size() == 0)
+        panic("for with no wordlist not implemented");
+
+    for (const string &word : expand_words(for_clause.wordlist)) {
+        xenv.set(for_clause.name, word);
+        exit_status = execute_compound_list(for_clause.body);
+    }
+
+    return exit_status;
+}
+
 int execute_if_clause(const ast_if_clause &if_clause)
 {
     for (size_t i = 0; i < if_clause.conditions.size(); i++)
@@ -1359,6 +1414,9 @@ int execute_command(const ast_command &command)
     }
     else if (std::holds_alternative<ast_subshell>(command.cmd)) {
         return execute_subshell(std::get<ast_subshell>(command.cmd));
+    }
+    else if (std::holds_alternative<ast_for_clause>(command.cmd)) {
+        return execute_for_clause(std::get<ast_for_clause>(command.cmd));
     }
     else if (std::holds_alternative<ast_if_clause>(command.cmd)) {
         return execute_if_clause(std::get<ast_if_clause>(command.cmd));
