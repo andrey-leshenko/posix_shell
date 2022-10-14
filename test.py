@@ -57,6 +57,12 @@ TESTS = [
     r'echo hello $(echo $(echo world)) yay',
     r'echo hello `echo \`echo world\`` yay',
 
+    # Variable scope
+    r'echo $A ; A=123 ; echo $A',
+    r'echo $A ; echo $(A=123) ; echo $A',
+    r'echo $A ; echo `A=123` ; echo $A',
+    r'echo $A ; (A=123) ; echo $A',
+
     # quoting
 
     r'echo "hello   world"',

@@ -65,6 +65,13 @@ vector<string> operators
     "<>",
     "<<-",
     ">|",
+    "&",
+    "|",
+    ";",
+    "<",
+    ">",
+    "(",
+    ")",
 };
 
 vector<string> special_chars
@@ -107,7 +114,6 @@ enum class TokenType
     IO_NUMBER,
 
     OPERATOR,
-    SPECIAL_CHAR,
     RESERVED_WORD,
 };
 
@@ -506,10 +512,6 @@ class TokenReader
             return TokenType::OPERATOR;
         }
 
-        if (std::find(special_chars.begin(), special_chars.end(), token) != special_chars.end()) {
-            return TokenType::SPECIAL_CHAR;
-        }
-
         if (parse_reserved) {
             if (std::find(reserved_words.begin(), reserved_words.end(), token) != reserved_words.end()) {
                 return TokenType::RESERVED_WORD;
@@ -654,7 +656,7 @@ struct ast_and_or
 
 struct ast_program
 {
-    vector<ast_and_or> and_ors;
+    ast_compound_list commands;
 };
 
 // Read zero or more new lines
@@ -666,8 +668,8 @@ void parse_skip_linebreak(TokenReader &r)
 
 bool at_redirect_operator(TokenReader &r)
 {
-    return r.at(TokenType::SPECIAL_CHAR, "<")
-        || r.at(TokenType::SPECIAL_CHAR, ">")
+    return r.at(TokenType::OPERATOR, "<")
+        || r.at(TokenType::OPERATOR, ">")
         || r.at(TokenType::OPERATOR, "<&")
         || r.at(TokenType::OPERATOR, ">&")
         || r.at(TokenType::OPERATOR, ">>")
@@ -755,6 +757,17 @@ ast_brace_group parse_brace_group(TokenReader &r)
     return brace_group;
 }
 
+ast_subshell parse_subshell(TokenReader &r)
+{
+    ast_subshell subshell;
+
+    r.eat_reserved(TokenType::OPERATOR, "(");
+    subshell.commands = parse_compound_list(r);
+    r.eat_reserved(TokenType::OPERATOR, ")");
+
+    return subshell;
+}
+
 ast_if_clause parse_if_clause(TokenReader &r)
 {
     ast_if_clause if_clause;
@@ -796,8 +809,8 @@ ast_command parse_command(TokenReader &r)
 
     if (r.at_reserved(TokenType::RESERVED_WORD, "{"))
         command.cmd = parse_brace_group(r);
-    else if (r.at_reserved(TokenType::SPECIAL_CHAR, "("))
-        panic("unimplemented");
+    else if (r.at_reserved(TokenType::OPERATOR, "("))
+        command.cmd = parse_subshell(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "for"))
         panic("unimplemented");
     else if (r.at_reserved(TokenType::RESERVED_WORD, "case"))
@@ -824,7 +837,7 @@ ast_pipeline parse_pipeline(TokenReader &r)
     while (true) {
         pipeline.commands.push_back(parse_command(r));
 
-        if (r.at(TokenType::SPECIAL_CHAR, "|")) {
+        if (r.at(TokenType::OPERATOR, "|")) {
             r.pop();
             parse_skip_linebreak(r);
         }
@@ -853,8 +866,8 @@ ast_and_or parse_and_or(TokenReader &r)
         }
     }
 
-    if (r.at(TokenType::SPECIAL_CHAR, ";") || r.at(TokenType::SPECIAL_CHAR, "&")) {
-        and_or.async = r.at(TokenType::SPECIAL_CHAR, "&");
+    if (r.at(TokenType::OPERATOR, ";") || r.at(TokenType::OPERATOR, "&")) {
+        and_or.async = r.at(TokenType::OPERATOR, "&");
         r.pop();
     }
 
@@ -863,7 +876,7 @@ ast_and_or parse_and_or(TokenReader &r)
 
 bool at_compound_list_end(TokenReader &r)
 {
-    return r.at_reserved(TokenType::SPECIAL_CHAR, ")")
+    return r.at_reserved(TokenType::OPERATOR, ")")
         || r.at_reserved(TokenType::RESERVED_WORD, "then")
         || r.at_reserved(TokenType::RESERVED_WORD, "else")
         || r.at_reserved(TokenType::RESERVED_WORD, "elif")
@@ -892,12 +905,10 @@ ast_program parse_program(TokenReader &r)
 {
     ast_program program;
 
-    parse_skip_linebreak(r);
+    program.commands = parse_compound_list(r);
 
-    while (!r.eof()) {
-        program.and_ors.push_back(parse_and_or(r));
-        parse_skip_linebreak(r);
-    }
+    if (!r.eof())
+        panic("unexpected token at end of program");
 
     return program;
 }
@@ -972,13 +983,7 @@ string expand_tilde_prefix(const string &tilde_prefix)
     }
 }
 
-void execute(const string &program);
-
-void subshell(const string &program)
-{
-    // TODO: Really open a subshell here
-    execute(program);
-}
+int execute_in_subshell(const string &program);
 
 string expand_command(const string &command)
 {
@@ -991,7 +996,7 @@ string expand_command(const string &command)
 
     dup2(new_stdout, 1);
     close(new_stdout);
-    subshell(command);
+    execute_in_subshell(command);
     dup2(old_stdout, 1);
     close(old_stdout);
 
@@ -1299,6 +1304,24 @@ int execute_simple_command(const ast_simple_command &simple_command)
 
 int execute_compound_list(const ast_compound_list &compound_list);
 
+int execute_subshell(const ast_subshell &subshell)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        panic("fork failed");
+    }
+
+    if (pid > 0) {
+        // Parent
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        return WEXITSTATUS(wstatus);
+    }
+
+    exit(execute_compound_list(subshell.commands));
+}
+
 int execute_if_clause(const ast_if_clause &if_clause)
 {
     for (size_t i = 0; i < if_clause.conditions.size(); i++)
@@ -1333,6 +1356,9 @@ int execute_command(const ast_command &command)
     }
     else if (std::holds_alternative<ast_brace_group>(command.cmd)) {
         return execute_compound_list(std::get<ast_brace_group>(command.cmd).commands);
+    }
+    else if (std::holds_alternative<ast_subshell>(command.cmd)) {
+        return execute_subshell(std::get<ast_subshell>(command.cmd));
     }
     else if (std::holds_alternative<ast_if_clause>(command.cmd)) {
         return execute_if_clause(std::get<ast_if_clause>(command.cmd));
@@ -1460,15 +1486,8 @@ int execute_compound_list(const ast_compound_list &compound_list)
 
 int execute_program(const ast_program &program)
 {
-    int exit_status = 0;
-
-    for (const ast_and_or& and_or : program.and_ors) {
-        exit_status = execute_and_or(and_or);
-    }
-
-    return exit_status;
+    return execute_compound_list(program.commands);
 }
-
 
 
 // 2.6.1 Tilde Expansion
@@ -1560,25 +1579,46 @@ string quote_remove(const string &word)
     return result;
 }
 
-void execute(const string &program)
+int execute(const string &program)
 {
     TokenReader r = TokenReader(Reader(program));
     ast_program p = parse_program(r);
-    execute_program(p);
+    return execute_program(p);
 }
 
-void repl()
+int execute_in_subshell(const string &program)
+{
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        panic("fork failed");
+    }
+
+    if (pid > 0) {
+        // Parent
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        return WEXITSTATUS(wstatus);
+    }
+
+    exit(execute(program));
+}
+
+int_least32_t repl()
 {
     string line;
+    int exit_status = 0;
 
     std::cout << "$ " << std::flush;
     while (std::getline(std::cin, line)) {
         // Reader r(line);
         // while (!r.eof())
         //     std::cout << r.read_token() << std::endl;
-        execute(line);
+        exit_status = execute(line);
         std::cout << "$ " << std::flush;
     }
+
+    return exit_status;
 }
 
 int main(int argc, const char *argv[])
@@ -1587,12 +1627,10 @@ int main(int argc, const char *argv[])
 
     if (argc == 3 && strcmp(argv[1], "-c") == 0) {
         // TODO: Robust argument parsing
-        execute(argv[2]);
-        return 0;
+        return execute(argv[2]);
     }
 
-    repl();
-    return 0;
+    return repl();
 
     std::ifstream f("test2.sh");
     std::stringstream buffer;
