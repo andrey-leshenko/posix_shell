@@ -87,7 +87,13 @@ TESTS = [
 
     # for
     r'for x in 1 2 3; do echo $x; done',
-    r'for x in 1$(echo 1 2 3)3; do echo $x; done'
+    r'for x in 1$(echo 1 2 3)3; do echo $x; done',
+
+    # case
+    r'case 2 in 1) echo A ;; (2) echo B ;; 3) echo C ;; esac',
+    r'case 4 in 1) echo A ;; (2) echo B ;; 3) echo C ;; esac',
+    r'case 4 in 1) echo A ;; (2) echo B ;; 3|4) echo C ;; esac',
+    r"""case "a b" in a) echo A ;; (b) echo B ;; 'a b') echo C ;; esac""",
 ]
 
 def run_test(command):

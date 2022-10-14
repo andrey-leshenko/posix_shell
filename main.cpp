@@ -620,9 +620,16 @@ struct ast_subshell
 
 struct ast_for_clause
 {
-    string name;
+    string var_name;
     vector<string> wordlist;
     ast_compound_list body;
+};
+
+struct ast_case_clause
+{
+    string value;
+    vector<vector<string>> patterns;
+    vector<ast_compound_list> bodies;
 };
 
 struct ast_if_clause
@@ -645,6 +652,7 @@ struct ast_command
         ast_brace_group,
         ast_subshell,
         ast_for_clause,
+        ast_case_clause,
         ast_if_clause,
         ast_while_clause> cmd;
 };
@@ -781,7 +789,7 @@ ast_for_clause parse_for_clause(TokenReader &r)
     ast_for_clause for_clause;
 
     r.eat_reserved(TokenType::RESERVED_WORD, "for");
-    for_clause.name = r.pop(TokenType::WORD);
+    for_clause.var_name = r.pop(TokenType::WORD);
     parse_skip_linebreak(r);
 
     if (r.at_reserved(TokenType::RESERVED_WORD, "in")) {
@@ -799,6 +807,46 @@ ast_for_clause parse_for_clause(TokenReader &r)
     r.eat_reserved(TokenType::RESERVED_WORD, "done");
 
     return for_clause;
+}
+
+ast_case_clause parse_case_clause(TokenReader &r)
+{
+    ast_case_clause case_clause;
+
+    r.eat_reserved(TokenType::RESERVED_WORD, "case");
+    case_clause.value = r.pop(TokenType::WORD);
+    parse_skip_linebreak(r);
+    r.eat_reserved(TokenType::RESERVED_WORD, "in");
+    parse_skip_linebreak(r);
+
+    while (!r.at_reserved(TokenType::RESERVED_WORD, "esac")) {
+        if (r.at(TokenType::OPERATOR, "("))
+            r.pop();
+        
+        vector<string> pattern;
+
+        pattern.push_back(r.pop(TokenType::WORD));
+
+        while (r.at(TokenType::OPERATOR, "|")) {
+            r.pop();
+            pattern.push_back(r.pop(TokenType::WORD));
+        }
+
+        // TODO: Doesn't really need to be reserved
+        r.eat_reserved(TokenType::OPERATOR, ")");
+
+        case_clause.patterns.push_back(pattern);
+        case_clause.bodies.push_back(parse_compound_list(r));
+
+        if (r.at_reserved(TokenType::OPERATOR, ";;")) {
+            r.pop();
+            parse_skip_linebreak(r);
+        }
+    }
+
+    r.eat_reserved(TokenType::RESERVED_WORD, "esac");
+
+    return case_clause;
 }
 
 ast_if_clause parse_if_clause(TokenReader &r)
@@ -847,7 +895,7 @@ ast_command parse_command(TokenReader &r)
     else if (r.at_reserved(TokenType::RESERVED_WORD, "for"))
         command.cmd = parse_for_clause(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "case"))
-        panic("unimplemented");
+        command.cmd = parse_case_clause(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "if"))
         command.cmd = parse_if_clause(r);
     else if (r.at_reserved(TokenType::RESERVED_WORD, "while") || r.at_reserved(TokenType::RESERVED_WORD, "until"))
@@ -917,7 +965,8 @@ bool at_compound_list_end(TokenReader &r)
         || r.at_reserved(TokenType::RESERVED_WORD, "do")
         || r.at_reserved(TokenType::RESERVED_WORD, "done")
         || r.at_reserved(TokenType::RESERVED_WORD, "esac")
-        || r.at_reserved(TokenType::RESERVED_WORD, "}");
+        || r.at_reserved(TokenType::RESERVED_WORD, "}")
+        || r.at_reserved(TokenType::OPERATOR, ";;");
 }
 
 ast_compound_list parse_compound_list(TokenReader &r)
@@ -1210,6 +1259,16 @@ vector<string> expand_word(const string &word)
     return fields;
 }
 
+string expand_word_no_split(const string &word)
+{
+    // TODO: Implement this properly
+
+    vector<string> fields = expand_word(word);
+    if (fields.size() != 1)
+        panic("accidentally did field splitting...");
+    return fields[0];
+}
+
 vector<string> expand_words(const vector<string> &words)
 {
     vector<string> expanded;
@@ -1370,8 +1429,37 @@ int execute_for_clause(const ast_for_clause &for_clause)
         panic("for with no wordlist not implemented");
 
     for (const string &word : expand_words(for_clause.wordlist)) {
-        xenv.set(for_clause.name, word);
+        xenv.set(for_clause.var_name, word);
         exit_status = execute_compound_list(for_clause.body);
+    }
+
+    return exit_status;
+}
+
+int execute_case_clause(const ast_case_clause &case_clause)
+{
+    int exit_status = 0;
+    
+    string expanded_value = expand_word_no_split(case_clause.value);
+
+    for (size_t i = 0; i < case_clause.patterns.size(); i++) {
+        const vector<string> &patterns = case_clause.patterns[i];
+
+        bool matched = false;
+
+        for (const string &pattern : patterns) {
+            string expanded_pattern = expand_word_no_split(pattern);
+            // TODO: Implement pattern matching
+            if (expanded_pattern == expanded_value) {
+                matched = true;
+                break;
+            }
+        }
+
+        if (matched) {
+            exit_status = execute_compound_list(case_clause.bodies[i]);
+            break;
+        }
     }
 
     return exit_status;
@@ -1417,6 +1505,9 @@ int execute_command(const ast_command &command)
     }
     else if (std::holds_alternative<ast_for_clause>(command.cmd)) {
         return execute_for_clause(std::get<ast_for_clause>(command.cmd));
+    }
+    else if (std::holds_alternative<ast_case_clause>(command.cmd)) {
+        return execute_case_clause(std::get<ast_case_clause>(command.cmd));
     }
     else if (std::holds_alternative<ast_if_clause>(command.cmd)) {
         return execute_if_clause(std::get<ast_if_clause>(command.cmd));
