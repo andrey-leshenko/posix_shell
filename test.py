@@ -104,6 +104,8 @@ TESTS = [
     r'A=3 ; foo() { echo $A; }',
     r'A=3 ; foo() { echo $A; } ; A=100 foo',
     r'foo() { echo aaa; } ; foo 1>&2',
+    r'foo() { echo X$1,$2,$3X ; } ; foo ; foo 1 2 ; foo 1 2 3 4 ; foo "hello world"',
+    r'foo() { echo X$1,$2,$3X ; } ; bar() { foo 1 2; } ; bar',
 ]
 
 def run_test(command):

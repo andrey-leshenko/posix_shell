@@ -1043,15 +1043,25 @@ class ex_env
 {
     map<string, var> vars;
     map<string, ast_function_definition> functions;
+    vector<vector<string>> args;
 
 public:
+
     bool has_var(const string &name)
     {
+        if (is_digits(name)) {
+            return has_arg(str_to_int(name.c_str()));
+        }
+
         return vars.find(name) != vars.end();
     }
 
     const string &get_var(const string &name)
     {
+        if (is_digits(name)) {
+            return get_arg(str_to_int(name.c_str()));
+        }
+
         return vars.at(name).value;
     }
     
@@ -1078,6 +1088,34 @@ public:
             set_var(name, value);
             mark_export(name);
         }
+    }
+
+    void push_args(const vector<string> &args)
+    {
+        this->args.push_back(args);
+    }
+
+    void pop_args()
+    {
+        if (this->args.size() == 0)
+            panic("no args to pop");
+        
+        this->args.pop_back();
+    }
+
+    bool has_arg(int i)
+    {
+        if (args.size() == 0)
+            return false;
+
+        return i >= 1 && i - 1 < (int)args.back().size();
+    }
+
+    const string &get_arg(int i)
+    {
+        assert(has_arg(i));
+
+        return args.back()[i - 1];
     }
 
     void set_func(const string &name, const ast_function_definition &value)
@@ -1479,8 +1517,11 @@ int execute_simple_command(const ast_simple_command &simple_command)
         panic("execve failed");
     }
     else if (type == CmdType::FUNCTION) {
-        // TODO: Still do temporary assignments and redirections for function calls
-        return execute_function_call(xenv.get_func(expanded_args[0]));
+        vector<string> args{expanded_args.begin() + 1, expanded_args.end()};
+        xenv.push_args(args);
+        int exit_status = execute_function_call(xenv.get_func(expanded_args[0]));
+        xenv.pop_args();
+        return exit_status;
     }
     else if (type == CmdType::EMPTY) {
         return 0;
