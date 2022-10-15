@@ -1062,7 +1062,7 @@ public:
 
     void mark_export(const string &name)
     {
-        vars[name].exported = true;
+        setenv(name.c_str(), get_var(name).c_str(), 1);
     }
 
     void init_from_environ()
@@ -1387,12 +1387,13 @@ void execute_redirect(const ast_redirect &redirect)
     }
 }
 
-void execute_assignment(const string &assignment_word)
+void execute_assignment(const string &assignment_word, bool export_var)
 {
     // TODO: Handle exporting of variables when assigning before simple command
     size_t equals = assignment_word.find_first_of('=');
     assert(equals != string::npos);
 
+    string name = assignment_word.substr(0, equals);
     vector<string> value_parts = expand_word(assignment_word.substr(equals + 1));
     string value;
 
@@ -1404,7 +1405,9 @@ void execute_assignment(const string &assignment_word)
         // TODO: decide how to handle this case
         panic("assignment of multiple fields");
 
-    xenv.set_var(assignment_word.substr(0, equals), value);
+    xenv.set_var(name, value);
+    if (export_var)
+        xenv.mark_export(name);
 }
 
 int execute_compound_list(const ast_compound_list &compound_list);
@@ -1416,14 +1419,27 @@ int execute_function_call(const ast_function_definition &function_definition)
 
 int execute_simple_command(const ast_simple_command &simple_command)
 {
+    enum class CmdType
+    {
+        EMPTY,
+        BUILTIN,
+        FUNCTION,
+        EXEC,
+    };
+
+    CmdType type;
+
     vector<string> expanded_args = expand_words(simple_command.args);
 
-    if (expanded_args.size() > 0 && xenv.has_func(expanded_args[0])) {
-        // TODO: Still do temporary assignments and redirections for function calls
-        return execute_function_call(xenv.get_func(expanded_args[0]));
-    }
+    if (expanded_args.size() == 0)
+        type = CmdType::EMPTY;
+    else if (xenv.has_func(expanded_args[0]))
+        type = CmdType::FUNCTION;
+    else
+        type = CmdType::EXEC;
 
-    if (expanded_args.size() > 0) {
+    if (type == CmdType::EXEC) {
+        // Fork, so the assignments and redirections are local
         pid_t pid = fork();
 
         if (pid < 0) {
@@ -1442,13 +1458,14 @@ int execute_simple_command(const ast_simple_command &simple_command)
         // will change the current execution environment.
     }
 
+    // TODO: For empty commands, redirect in subshell
     for (const ast_redirect &redirect : simple_command.redirections)
         execute_redirect(redirect);
 
     for (const string &assignment : simple_command.assignments)
-        execute_assignment(assignment);
+        execute_assignment(assignment, type == CmdType::EXEC);
     
-    if (expanded_args.size() > 0) {
+    if (type == CmdType::EXEC) {
         // Child
         vector<const char*> argv;
         for (auto& arg : expanded_args)
@@ -1461,8 +1478,15 @@ int execute_simple_command(const ast_simple_command &simple_command)
         execvp(argv[0], argv_ptr);
         panic("execve failed");
     }
-    else {
+    else if (type == CmdType::FUNCTION) {
+        // TODO: Still do temporary assignments and redirections for function calls
+        return execute_function_call(xenv.get_func(expanded_args[0]));
+    }
+    else if (type == CmdType::EMPTY) {
         return 0;
+    }
+    else {
+        assert(0);
     }
 }
 

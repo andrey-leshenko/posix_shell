@@ -102,7 +102,7 @@ TESTS = [
     r'foo() { echo 123; }',
     r'foo() { bar; } ; bar ( ) { echo baar; }',
     r'A=3 ; foo() { echo $A; }',
-    r'A=3 ; A=100 foo() { echo $A; }',
+    r'A=3 ; foo() { echo $A; } ; A=100 foo',
     r'foo() { echo aaa; } ; foo 1>&2',
 ]
 
