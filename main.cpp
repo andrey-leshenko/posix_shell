@@ -1043,6 +1043,7 @@ class ex_env
 {
     map<string, var> vars;
     map<string, ast_function_definition> functions;
+    string arg0;
     vector<vector<string>> args;
 
 public:
@@ -1105,6 +1106,8 @@ public:
 
     bool has_arg(int i)
     {
+        if (i == 0)
+            return true;
         if (args.size() == 0)
             return false;
 
@@ -1115,7 +1118,15 @@ public:
     {
         assert(has_arg(i));
 
+        if (i == 0)
+            return arg0;
+
         return args.back()[i - 1];
+    }
+
+    void set_arg0(const string &value)
+    {
+        arg0 = value;
     }
 
     void set_func(const string &name, const ast_function_definition &value)
@@ -1783,6 +1794,16 @@ int execute(const string &program)
     return execute_program(p);
 }
 
+int execute(const string &program, const string &arg0, const vector<string> &args, bool interactive)
+{
+    // TODO: Use the interactive flag
+    xenv.set_arg0(arg0);
+    xenv.push_args(args);
+    int exit_status = execute(program);
+    xenv.pop_args();
+    return exit_status;
+}
+
 int execute_in_subshell(const string &program)
 {
     pid_t pid = fork();
@@ -1801,7 +1822,7 @@ int execute_in_subshell(const string &program)
     exit(execute(program));
 }
 
-int_least32_t repl()
+int repl()
 {
     string line;
     int exit_status = 0;
@@ -1818,32 +1839,25 @@ int_least32_t repl()
     return exit_status;
 }
 
-int main(int argc, const char *argv[])
+int main(int argc, char *argv[])
 {
     xenv.init_from_environ();
+    xenv.set_arg0("shell");
 
-    if (argc == 3 && strcmp(argv[1], "-c") == 0) {
-        // TODO: Robust argument parsing
-        return execute(argv[2]);
+    if (getopt(argc, argv, "+c:") == 'c') {
+        string arg0 = xenv.get_arg(0);
+        vector<string> args;
+        if (optind < argc) {
+            arg0 = argv[optind];
+            args = vector<string>(argv + optind + 1, argv + argc);
+        }
+        return execute(optarg, arg0, args, false);
     }
-
-    return repl();
-
-    std::ifstream f("test2.sh");
-    std::stringstream buffer;
-    buffer << f.rdbuf();
-    string script = buffer.str();
-
-    // vector<string> tokens = tokenize(script.c_str(), script.size());
-
-    // for (auto& s : tokens) {
-    //     if (s == "\n")
-    //         printf("'\\n'\n");
-    //     else
-    //         printf("%s\n", s.c_str());
-    // }
-
-    //parse(script.c_str(), script.size());
-
-    return 0;
+    else if (argc > 1) {
+        vector<string> args(argv + 2, argv + argc);
+        return execute(read_file(argv[1]), argv[1], args, false);
+    }
+    else {
+        return repl();
+    }
 }
