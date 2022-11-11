@@ -23,15 +23,35 @@ using std::string;
 using std::map;
 using std::variant;
 
-#define _C(X) X
+#define SHELL_NAME "posix_shell"
+
+// Errors
+
+class shell_exception : public std::exception
+{
+    string msg;
+public:
+    shell_exception(const string &msg)
+        : msg{msg}
+    { }
+
+    virtual const char *what() const noexcept
+    {
+        return msg.c_str();
+    }
+};
+
+[[noreturn]] void panic(const string &msg)
+{
+    throw shell_exception(msg);
+}
+
+void error_message(const string &msg)
+{
+    std::cerr << SHELL_NAME << ": " << msg << std::endl;
+}
 
 // Utils
-
-void panic [[ noreturn ]] (const char* msg)
-{
-    printf("panic: %s\n", msg);
-    exit(-1);
-}
 
 int str_to_int(const char *str)
 {
@@ -548,7 +568,7 @@ private:
     string _pop(TokenType expected_type, bool parse_reserved)
     {
         if (expected_type != token_type(token, is_io_number, parse_reserved))
-            panic("unexpected token type");
+            panic(string("syntax error near token of unexpected type '") + token + "'");
         return pop();
     }
 
@@ -566,10 +586,9 @@ private:
     {
         if (!_at(type, value, parse_reserved)) {
             if (eof())
-                printf("syntax error near unexpected EOF\n");
+                panic("syntax error near unexpected EOF");
             else
-                printf("syntax error near unexpected token %s\n", token.c_str());
-            panic("could not eat token");
+                panic(string("syntax error near unexpected token '") + token + "'");
         }
         pop();
     }
@@ -727,7 +746,7 @@ ast_redirect parse_redirect(TokenReader &r)
     }
 
     if (!at_redirect_operator(r)) {
-        panic("unexpected token");
+        panic("syntax error: expected redirection, but got '" + (r.eof() ? "EOF" : r.peek()) + "'");
     }
 
     redirect.op = r.pop();        
@@ -1026,7 +1045,7 @@ ast_program parse_program(TokenReader &r)
     program.commands = parse_compound_list(r);
 
     if (!r.eof())
-        panic("unexpected token at end of program");
+        panic("syntax error near unexpected token '" + r.peek() + "'");
 
     return program;
 }
@@ -1099,7 +1118,7 @@ public:
     void pop_args()
     {
         if (this->args.size() == 0)
-            panic("no args to pop");
+            assert(0);
         
         this->args.pop_back();
     }
@@ -1384,7 +1403,7 @@ vector<string> expand_words(const vector<string> &words)
 
 // Execution
 
-void execute_redirect(const ast_redirect &redirect)
+bool execute_redirect(const ast_redirect &redirect)
 {
     int left_fd;
 
@@ -1429,11 +1448,15 @@ void execute_redirect(const ast_redirect &redirect)
             panic("ambiguous redirect");
 
         int right_fd = open(results[0].c_str(), flags, 0666);
-        if (right_fd < 0)
-            panic("redirect file open failed");
+        if (right_fd < 0) {
+            error_message(results[0] + ": file open failed");
+            return false;
+        }
         dup2(right_fd, left_fd);
         close(right_fd);
     }
+
+    return true;
 }
 
 void execute_assignment(const string &assignment_word, bool export_var)
@@ -1508,8 +1531,14 @@ int execute_simple_command(const ast_simple_command &simple_command)
     }
 
     // TODO: For empty commands, redirect in subshell
-    for (const ast_redirect &redirect : simple_command.redirections)
-        execute_redirect(redirect);
+    for (const ast_redirect &redirect : simple_command.redirections) {
+        if (!execute_redirect(redirect)) {
+            if (type == CmdType::EXEC)
+                exit(1);
+            else
+                return 1;
+        }
+    }
 
     for (const string &assignment : simple_command.assignments)
         execute_assignment(assignment, type == CmdType::EXEC);
@@ -1692,7 +1721,8 @@ int execute_pipeline(const ast_pipeline &pipeline)
         rpipe[1] = wpipe[1];
 
         if (i + 1 < commands.size()) {
-            _C(pipe(wpipe));
+            if (pipe(wpipe) < 0)
+                panic("pipe failed");
         }
 
         pid_t pid = fork();
@@ -1827,13 +1857,15 @@ int repl()
     string line;
     int exit_status = 0;
 
-    std::cout << "$ " << std::flush;
+    std::cerr << "$ " << std::flush;
     while (std::getline(std::cin, line)) {
-        // Reader r(line);
-        // while (!r.eof())
-        //     std::cout << r.read_token() << std::endl;
-        exit_status = execute(line);
-        std::cout << "$ " << std::flush;
+        try {
+            exit_status = execute(line);
+        }
+        catch (const shell_exception &e) {
+            error_message(e.what());
+        }
+        std::cerr << "$ " << std::flush;
     }
 
     return exit_status;
@@ -1842,7 +1874,7 @@ int repl()
 int main(int argc, char *argv[])
 {
     xenv.init_from_environ();
-    xenv.set_arg0("shell");
+    xenv.set_arg0(SHELL_NAME);
 
     if (getopt(argc, argv, "+c:") == 'c') {
         string arg0 = xenv.get_arg(0);
