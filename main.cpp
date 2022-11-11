@@ -1211,8 +1211,54 @@ string expand_command(const string &command)
     return result;
 }
 
+string expand_word_no_split(const string &word);
+
 string expand_param(const string &param)
 {
+    if (param.size() && param[0] == '#') {
+        string value = xenv.has_var(param.substr(1)) ? xenv.get_var(param.substr(1)) : "";
+        return std::to_string(value.size());
+    }
+
+    for (const char c : {'-', '=', '?', '+'}) {
+        for (const char *k : {":", ""}) {
+            string op = string{k} + c;
+            size_t i;
+            if ((i = param.find(op)) == string::npos)
+                continue;
+            
+            string parameter = param.substr(0, i);
+            string word = param.substr(i + op.size());
+            bool empty = !xenv.has_var(parameter) || (k[0] == ':' && xenv.get_var(parameter) == "");
+
+            if (c == '-') {
+                if (empty)
+                    return expand_word_no_split(word);
+                else
+                    return xenv.get_var(parameter);
+            }
+            else if (c == '=') {
+                if (empty)
+                    xenv.set_var(parameter, expand_word_no_split(word));
+                return xenv.get_var(parameter);
+            }
+            else if (c == '?') {
+                if (empty)
+                    panic(parameter + ": " + expand_word_no_split(word));
+                return xenv.get_var(parameter);
+            }
+            else if (c == '+') {
+                if (empty)
+                    return "";
+                else
+                    return expand_word_no_split(word);
+            }
+            else {
+                assert(0);
+            }
+        }
+    }
+
     if (!xenv.has_var(param))
         return "";
     
@@ -1312,8 +1358,7 @@ string expand_dollar_or_backquote(Reader &r)
     else if (r.at("$("))
         return expand_command(r.read_subshell(false));
     else if (r.at("${"))
-        //return r.read_param_expand_in_braces(false);
-        panic("parameter expansion not implemented");
+        return expand_param(r.read_param_expand_in_braces(false));
     else if (r.at('$'))
         return expand_param(r.read_param_expand(false));
     else if (r.at('`'))
@@ -1384,9 +1429,12 @@ string expand_word_no_split(const string &word)
     // TODO: Implement this properly
 
     vector<string> fields = expand_word(word);
-    if (fields.size() != 1)
+    if (fields.size() == 0)
+        return "";
+    else if (fields.size() == 1)
+        return fields[0];
+    else
         panic("accidentally did field splitting...");
-    return fields[0];
 }
 
 vector<string> expand_words(const vector<string> &words)
