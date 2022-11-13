@@ -1216,7 +1216,8 @@ string expand_word_no_split(const string &word);
 string expand_param(const string &param)
 {
     if (param.size() && param[0] == '#') {
-        string value = xenv.has_var(param.substr(1)) ? xenv.get_var(param.substr(1)) : "";
+        string var = param.substr(1);
+        string value = xenv.has_var(var) ? xenv.get_var(var) : "";
         return std::to_string(value.size());
     }
 
@@ -1227,25 +1228,25 @@ string expand_param(const string &param)
             if ((i = param.find(op)) == string::npos)
                 continue;
             
-            string parameter = param.substr(0, i);
+            string var = param.substr(0, i);
             string word = param.substr(i + op.size());
-            bool empty = !xenv.has_var(parameter) || (k[0] == ':' && xenv.get_var(parameter) == "");
+            bool empty = !xenv.has_var(var) || (k[0] == ':' && xenv.get_var(var) == "");
 
             if (c == '-') {
                 if (empty)
                     return expand_word_no_split(word);
                 else
-                    return xenv.get_var(parameter);
+                    return xenv.get_var(var);
             }
             else if (c == '=') {
                 if (empty)
-                    xenv.set_var(parameter, expand_word_no_split(word));
-                return xenv.get_var(parameter);
+                    xenv.set_var(var, expand_word_no_split(word));
+                return xenv.get_var(var);
             }
             else if (c == '?') {
                 if (empty)
-                    panic(parameter + ": " + expand_word_no_split(word));
-                return xenv.get_var(parameter);
+                    panic(var + ": " + expand_word_no_split(word));
+                return xenv.get_var(var);
             }
             else if (c == '+') {
                 if (empty)
@@ -1258,6 +1259,8 @@ string expand_param(const string &param)
             }
         }
     }
+
+    // TODO: Implement suffix/prefix modification
 
     if (!xenv.has_var(param))
         return "";
