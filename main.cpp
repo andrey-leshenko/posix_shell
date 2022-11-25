@@ -1609,7 +1609,9 @@ int execute_simple_command(const ast_simple_command &simple_command)
         char ** argv_ptr = const_cast<char **>(&argv[0]);
 
         execvp(argv[0], argv_ptr);
-        panic("execve failed");
+        // execve failed
+        error_message(string("error executing ") + argv[0]);
+        exit(1);
     }
     else if (type == CmdType::FUNCTION) {
         vector<string> args{expanded_args.begin() + 1, expanded_args.end()};
