@@ -18,6 +18,10 @@
 #include <memory>
 #include <variant>
 
+#include <readline/readline.h>
+#include <readline/history.h>
+#undef NEWLINE // Readline is annoying and defines this
+
 using std::vector;
 using std::string;
 using std::map;
@@ -1903,20 +1907,36 @@ int execute_in_subshell(const string &program)
     exit(execute(program));
 }
 
+static string readline_last_history;
+
+bool readline_getline(const char *prompt, string &str)
+{
+    std::unique_ptr<char, decltype(free)*> ptr{readline(prompt), free};
+
+    if (!ptr)
+        return false;
+    
+    str.assign(ptr.get());
+    if (str.find_first_not_of(' ') != string::npos && str != readline_last_history) {
+        add_history(ptr.get());
+        readline_last_history = str;
+    }
+    
+    return true;
+}
+
 int repl()
 {
     string line;
     int exit_status = 0;
 
-    std::cerr << "$ " << std::flush;
-    while (std::getline(std::cin, line)) {
+    while (readline_getline("$ ", line)) {
         try {
             exit_status = execute(line);
         }
         catch (const shell_exception &e) {
             error_message(e.what());
         }
-        std::cerr << "$ " << std::flush;
     }
 
     return exit_status;

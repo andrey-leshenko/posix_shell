@@ -106,6 +106,35 @@ TESTS = [
     r'foo() { echo aaa; } ; foo 1>&2',
     r'foo() { echo X$1,$2,$3X ; } ; foo ; foo 1 2 ; foo 1 2 3 4 ; foo "hello world"',
     r'foo() { echo X$1,$2,$3X ; } ; bar() { foo 1 2; } ; bar',
+
+    # advanced expansion
+
+    r'A=11; echo ${A-aaa}',
+    r'A=""; echo ${A-aaa}',
+    r'      echo ${A-aaa}',
+    r'A=11; echo ${A:-aaa}',
+    r'A=""; echo ${A:-aaa}',
+    r'      echo ${A:-aaa}',
+    r'A=11; echo ${A=aaa}',
+    r'A=""; echo ${A=aaa}',
+    r'      echo ${A=aaa}',
+    r'A=11; echo ${A:=aaa}',
+    r'A=""; echo ${A:=aaa}',
+    r'      echo ${A:=aaa}',
+    r'A=11; echo ${A+aaa}',
+    r'A=""; echo ${A+aaa}',
+    r'      echo ${A+aaa}',
+    r'A=11; echo ${A:+aaa}',
+    r'A=""; echo ${A:+aaa}',
+    r'      echo ${A:+aaa}',
+
+    r'A=11; echo ${A-}',
+    r'A=""; echo ${A-}',
+    r'      echo ${A-}',
+
+    r'A=11; echo ${#A}',
+    r'echo ${#A}',
+
 ]
 
 def run_test(command):
