@@ -1067,22 +1067,43 @@ class ex_env
     map<string, var> vars;
     map<string, ast_function_definition> functions;
     string arg0;
+    pid_t shell_pid;
     vector<vector<string>> args;
 
 public:
 
     bool has_var(const string &name)
     {
-        if (is_digits(name)) {
+        if (name.size() && is_digits(name)) {
             return has_arg(str_to_int(name.c_str()));
         }
+
+        if (name.size() == 1 && is_special_param(name[0]))
+            return true;
 
         return vars.find(name) != vars.end();
     }
 
-    const string &get_var(const string &name)
+    const string get_var(const string &name)
     {
-        if (is_digits(name)) {
+        if (name.size() == 1 && is_special_param(name[0])) {
+            char c = name[0];
+            if (c == '#') {
+                return std::to_string(args.back().size());
+            }
+            else if (c == '0') {
+                return arg0;
+            }
+            else if (c == '$') {
+                return std::to_string(shell_pid);
+            }
+            else {
+                std::cerr << "warning: special param not implemented" << std::endl;
+                return "";
+            }
+        }
+
+        if (name.size() && is_digits(name)) {
             return get_arg(str_to_int(name.c_str()));
         }
 
@@ -1152,6 +1173,11 @@ public:
         arg0 = value;
     }
 
+    void set_shell_pid(pid_t pid)
+    {
+        shell_pid = pid;
+    }
+
     void set_func(const string &name, const ast_function_definition &value)
     {
         functions[name] = value;
@@ -1219,47 +1245,49 @@ string expand_word_no_split(const string &word);
 
 string expand_param(const string &param)
 {
-    if (param.size() && param[0] == '#') {
-        string var = param.substr(1);
-        string value = xenv.has_var(var) ? xenv.get_var(var) : "";
-        return std::to_string(value.size());
-    }
+    if (param.size() >= 2) {
+        if (param[0] == '#') {
+            string var = param.substr(1);
+            string value = xenv.has_var(var) ? xenv.get_var(var) : "";
+            return std::to_string(value.size());
+        }
 
-    for (const char c : {'-', '=', '?', '+'}) {
-        for (const char *k : {":", ""}) {
-            string op = string{k} + c;
-            size_t i;
-            if ((i = param.find(op)) == string::npos)
-                continue;
-            
-            string var = param.substr(0, i);
-            string word = param.substr(i + op.size());
-            bool empty = !xenv.has_var(var) || (k[0] == ':' && xenv.get_var(var) == "");
+        for (const char c : {'-', '=', '?', '+'}) {
+            for (const char *k : {":", ""}) {
+                string op = string{k} + c;
+                size_t i;
+                if ((i = param.find(op)) == string::npos)
+                    continue;
+                
+                string var = param.substr(0, i);
+                string word = param.substr(i + op.size());
+                bool empty = !xenv.has_var(var) || (k[0] == ':' && xenv.get_var(var) == "");
 
-            if (c == '-') {
-                if (empty)
-                    return expand_word_no_split(word);
-                else
+                if (c == '-') {
+                    if (empty)
+                        return expand_word_no_split(word);
+                    else
+                        return xenv.get_var(var);
+                }
+                else if (c == '=') {
+                    if (empty)
+                        xenv.set_var(var, expand_word_no_split(word));
                     return xenv.get_var(var);
-            }
-            else if (c == '=') {
-                if (empty)
-                    xenv.set_var(var, expand_word_no_split(word));
-                return xenv.get_var(var);
-            }
-            else if (c == '?') {
-                if (empty)
-                    panic(var + ": " + expand_word_no_split(word));
-                return xenv.get_var(var);
-            }
-            else if (c == '+') {
-                if (empty)
-                    return "";
-                else
-                    return expand_word_no_split(word);
-            }
-            else {
-                assert(0);
+                }
+                else if (c == '?') {
+                    if (empty)
+                        panic(var + ": " + expand_word_no_split(word));
+                    return xenv.get_var(var);
+                }
+                else if (c == '+') {
+                    if (empty)
+                        return "";
+                    else
+                        return expand_word_no_split(word);
+                }
+                else {
+                    assert(0);
+                }
             }
         }
     }
@@ -1948,6 +1976,7 @@ int main(int argc, char *argv[])
 {
     xenv.init_from_environ();
     xenv.set_arg0(SHELL_NAME);
+    xenv.set_shell_pid(getpid());
 
     if (getopt(argc, argv, "+c:") == 'c') {
         string arg0 = xenv.get_arg(0);
@@ -1963,6 +1992,7 @@ int main(int argc, char *argv[])
         return execute(read_file(argv[1]), argv[1], args, false);
     }
     else {
+        xenv.push_args({});
         return repl();
     }
 }
