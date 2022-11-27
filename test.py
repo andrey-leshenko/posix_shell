@@ -135,6 +135,11 @@ TESTS = [
     r'A=11; echo ${#A}',
     r'echo ${#A}',
 
+    # cases with no field splitting
+    r'B="aaa bbb"; echo ${A:-$B}',
+    r'''echo "${A:-$(echo -e 'a\tb')}"''',
+    r'A="a    b"; case $A in "a    b") echo yay;; esac',
+    r'A="a    b"; B=$A; echo "$B"',
 ]
 
 def run_test(command):

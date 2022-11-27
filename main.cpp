@@ -1302,6 +1302,22 @@ string expand_param(const string &param)
 
 // Field splitting
 
+void field_append(vector<string> &fields, char c)
+{
+    if (fields.size())
+        fields.back().push_back(c);
+    else
+        fields.push_back(string{c});
+}
+
+void field_append(vector<string> &fields, const string &str)
+{
+    if (fields.size())
+        fields.back().append(str);
+    else
+        fields.push_back(str);
+}
+
 void field_split(vector<string> &fields, const string &str)
 {
     const char *ifs = getenv("IFS");
@@ -1310,7 +1326,7 @@ void field_split(vector<string> &fields, const string &str)
         ifs = " \t\n";
     
     if (strlen(ifs) == 0) {
-        fields.back().append(str);
+        field_append(fields, str);
         return;
     }
 
@@ -1369,22 +1385,6 @@ void field_split(vector<string> &fields, const string &str)
     }
 }
 
-void field_append(vector<string> &fields, char c)
-{
-    if (fields.size())
-        fields.back().push_back(c);
-    else
-        fields.push_back(string{c});
-}
-
-void field_append(vector<string> &fields, const string &str)
-{
-    if (fields.size())
-        fields.back().append(str);
-    else
-        fields.push_back(str);
-}
-
 string expand_dollar_or_backquote(Reader &r)
 {
     if (r.at("$(("))
@@ -1402,7 +1402,7 @@ string expand_dollar_or_backquote(Reader &r)
         assert(0);
 }
 
-vector<string> expand_word(const string &word)
+vector<string> expand_word(const string &word, bool field_splitting=true)
 {
     Reader r(word);
     vector<string> fields;
@@ -1419,8 +1419,6 @@ vector<string> expand_word(const string &word)
         if (slash != string::npos)
             field_append(fields, first_part.substr(slash));
     }
-
-    // TODO: Impelment the different expansions
 
     while (!r.eof()) {
         if (r.at('\\')) {
@@ -1450,8 +1448,13 @@ vector<string> expand_word(const string &word)
                     field_append(fields, r.pop());
             }
         }
-        else if (r.at('$') || r.at('`'))
-            field_split(fields, expand_dollar_or_backquote(r));
+        else if (r.at('$') || r.at('`')) {
+            string result = expand_dollar_or_backquote(r);
+            if (field_splitting)
+                field_split(fields, result);
+            else
+                field_append(fields, result);
+        }
         else
             field_append(fields, r.read_regular_part());
     }
@@ -1461,15 +1464,14 @@ vector<string> expand_word(const string &word)
 
 string expand_word_no_split(const string &word)
 {
-    // TODO: Implement this properly
+    vector<string> result =  expand_word(word, false);
 
-    vector<string> fields = expand_word(word);
-    if (fields.size() == 0)
+    if (result.size() == 0)
         return "";
-    else if (fields.size() == 1)
-        return fields[0];
+    else if (result.size() == 1)
+        return result[0];
     else
-        panic("accidentally did field splitting...");
+        assert(0);
 }
 
 vector<string> expand_words(const vector<string> &words)
@@ -1549,16 +1551,7 @@ void execute_assignment(const string &assignment_word, bool export_var)
     assert(equals != string::npos);
 
     string name = assignment_word.substr(0, equals);
-    vector<string> value_parts = expand_word(assignment_word.substr(equals + 1));
-    string value;
-
-    if (value_parts.size() == 0)
-        value = string();
-    else if (value_parts.size() == 1)
-        value = value_parts[0];
-    else
-        // TODO: decide how to handle this case
-        panic("assignment of multiple fields");
+    string value = expand_word_no_split(assignment_word.substr(equals + 1));
 
     xenv.set_var(name, value);
     if (export_var)
