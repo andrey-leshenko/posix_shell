@@ -75,6 +75,24 @@ string read_file(const char *path)
     return buffer.str();
 }
 
+string read_fd(int fd)
+{
+    static char buff[1024];
+    string result;
+
+    while (true) {
+        int res = read(fd, buff, sizeof(buff));
+        if (res > 0)
+            result.append(buff, res);
+        else if (res == 0)
+            break;
+        else
+            panic("read_fd read failed");
+    }
+    
+    return result;
+}
+
 // Prasing
 
 vector<string> operators
@@ -1218,26 +1236,30 @@ string expand_tilde_prefix(const string &tilde_prefix)
 int execute_in_subshell(const string &program);
 
 string expand_command(const string &command)
-{
-    // TODO: Find something more elegant than redirecting to a file
+{   
+    int pipe_fd[2] = {-1, -1};
 
-    // The X-s will be replaced by mkstemp
-    char filename[] = "/tmp/shell_stdoutXXXXXX";
-    int new_stdout = mkstemp(filename);
-    int old_stdout = dup(1);
+    if (pipe(pipe_fd) < 0)
+        panic("pipe failed");
 
-    dup2(new_stdout, 1);
-    close(new_stdout);
-    execute_in_subshell(command);
-    dup2(old_stdout, 1);
-    close(old_stdout);
+    pid_t pid = fork();
 
-    string result = read_file(filename);
-    unlink(filename);
+    if (pid < 0)
+            panic("fork failed");
 
-    while (result.size() && result.back() == '\n')
-        result.pop_back();
+    if (pid == 0) {
+        // Child process
+        dup2(pipe_fd[1], 1);
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        execute_in_subshell(command);
+        exit(0);
+    }
 
+    // Parent process
+    close(pipe_fd[1]);
+    string result = read_fd(pipe_fd[0]);
+    waitpid(pid, nullptr, 0);
     return result;
 }
 
