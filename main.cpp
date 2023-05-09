@@ -1463,7 +1463,7 @@ vector<string> expand_word(const string &word, bool field_splitting=true)
 
             while (!r.eof()) {
                 if (r.at("\\$") || r.at("\\`") || r.at("\\\\"))
-                    field_append(fields, string{"\\"} + r.pop());
+                    field_append(fields,  r.read_slash_quote(false));
                 else if (r.at('$') || r.at('`'))
                     field_append(fields, expand_dollar_or_backquote(r));
                 else
