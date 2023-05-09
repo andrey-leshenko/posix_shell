@@ -70,6 +70,7 @@ TESTS = [
     r'echo "hello   world"',
 
     r"echo 'hello   world'",
+    r'echo "hello \$0"',
     r"echo 'hello \ $(date) `date` ${date}   world'",
 
     r'echo',
