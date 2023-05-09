@@ -310,7 +310,7 @@ public:
         
         if (eof())
             // Interpreted as a regular $
-            return "$";
+            return result;
         
         if (isdigit(peek()) || is_special_param(peek())) {
             result.push_back(pop());
@@ -1267,6 +1267,10 @@ string expand_word_no_split(const string &word);
 
 string expand_param(const string &param)
 {
+    if (param.size() == 0)
+        // Interpreted as regular $
+        return "$";
+
     if (param.size() >= 2) {
         if (param[0] == '#') {
             string var = param.substr(1);

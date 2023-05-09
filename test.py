@@ -136,6 +136,8 @@ TESTS = [
     r'A=11; echo ${#A}',
     r'echo ${#A}',
 
+    r'echo $',
+
     # cases with no field splitting
     r'B="aaa bbb"; echo ${A:-$B}',
     r'''echo "${A:-$(echo -e 'a\tb')}"''',
